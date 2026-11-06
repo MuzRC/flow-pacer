@@ -34,12 +34,20 @@ class FlowPacerService : VpnService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
     private var adaptiveMonitorJob: Job? = null
 
+    // Enjin Kawalan Muat Naik
     private val uploadTokenBucket = TokenBucket(
         maxTokens = 16 * 1024,
         initialRateMbps = 3.8
     )
 
-    private var currentAdaptiveRateMbps = 3.8
+    // Enjin Kawalan Muat Turun (Menghalang Repeater daripada tenggelam)
+    private val downloadTokenBucket = TokenBucket(
+        maxTokens = 32 * 1024,
+        initialRateMbps = 16.0
+    )
+
+    private var currentAdaptiveUploadMbps = 3.8
+    private var currentAdaptiveDownloadMbps = 16.0
     private var baselinePing = 0L
 
     companion object {
@@ -93,12 +101,19 @@ class FlowPacerService : VpnService() {
     private fun setOperationalMode(mode: Int) {
         activeMode = mode
         uploadTokenBucket.setMode(mode)
+        downloadTokenBucket.setMode(mode)
+
+        if (mode == TokenBucket.MODE_GAMING) {
+            uploadTokenBucket.adjustRate(3.8)
+            downloadTokenBucket.adjustRate(12.0) // Had muat turun ketat untuk kunci kependaman
+        }
+
         updateNotification()
 
         val reportedRate = when (mode) {
             TokenBucket.MODE_GAMING -> 3.8
             TokenBucket.MODE_UNLIMITED -> -1.0
-            else -> currentAdaptiveRateMbps
+            else -> currentAdaptiveUploadMbps
         }
         broadcastMetrics(-1L, reportedRate)
     }
@@ -111,7 +126,8 @@ class FlowPacerService : VpnService() {
         try {
             proxyServer = LocalProxyServer(
                 port = PROXY_PORT,
-                tokenBucket = uploadTokenBucket,
+                uploadTokenBucket = uploadTokenBucket,
+                downloadTokenBucket = downloadTokenBucket,
                 onProtectSocket = { socket -> protect(socket) }
             ).apply {
                 start()
@@ -171,11 +187,9 @@ class FlowPacerService : VpnService() {
         adaptiveMonitorJob?.cancel()
         adaptiveMonitorJob = serviceScope.launch {
             while (isActive) {
-                // Timeout 2000ms memastikan semakan tidak tergantung bila antrean mula kembung
                 val ping = probeLatency("1.1.1.1", 443, 2000)
 
                 if (ping > 0) {
-                    // Kalibrasi paras lantai: ambil ping terendah sebagai penanda aras
                     if (baselinePing == 0L || ping < baselinePing) {
                         baselinePing = ping
                     }
@@ -185,34 +199,42 @@ class FlowPacerService : VpnService() {
 
                         when {
                             // 1. ZON CEMAS (Ping > 300ms atau lonjakan mendadak > 180ms):
-                            // Terus pancung ke siling lantai 1.0 Mbps serta-merta tanpa bertolak ansur
+                            // Pancung kedua-dua laluan! Muat naik ke 1.0 Mbps & Muat turun ke 4.0 Mbps serta-merta!
                             ping > 300 || bloatDelta > 180 -> {
-                                currentAdaptiveRateMbps = 1.0
-                                uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                                currentAdaptiveUploadMbps = 1.0
+                                currentAdaptiveDownloadMbps = 4.0
+                                uploadTokenBucket.adjustRate(currentAdaptiveUploadMbps)
+                                downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
                             }
 
-                            // 2. SESAK SEDERHANA (Lonjakan > 60ms dari lantai):
-                            // Cantas 40% kelajuan muat naik
+                            // 2. SESAK TINGGI (Lonjakan > 60ms dari paras lantai):
+                            // Cantas 40% muat naik dan 30% muat turun
                             bloatDelta > 60 -> {
-                                currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.60).coerceAtLeast(1.2)
-                                uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                                currentAdaptiveUploadMbps = (currentAdaptiveUploadMbps * 0.60).coerceAtLeast(1.2)
+                                currentAdaptiveDownloadMbps = (currentAdaptiveDownloadMbps * 0.70).coerceAtLeast(6.0)
+                                uploadTokenBucket.adjustRate(currentAdaptiveUploadMbps)
+                                downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
                             }
 
                             // 3. MULA MERAYAP (Lonjakan > 20ms dari lantai):
-                            // Tahan sedikit aliran (-15%)
+                            // Tahan sedikit aliran
                             bloatDelta > 20 -> {
-                                currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.85).coerceAtLeast(1.5)
-                                uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                                currentAdaptiveUploadMbps = (currentAdaptiveUploadMbps * 0.85).coerceAtLeast(1.5)
+                                currentAdaptiveDownloadMbps = (currentAdaptiveDownloadMbps * 0.90).coerceAtLeast(10.0)
+                                uploadTokenBucket.adjustRate(currentAdaptiveUploadMbps)
+                                downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
                             }
 
-                            // 4. TALIAN LAPANG & STABIL (Rapat dengan lantai <= 10ms):
-                            // Uji naikkan had siling secara beransur-ansur (+0.4 Mbps)
+                            // 4. TALIAN TENANG & LAPANG (Rapat dengan lantai <= 10ms):
+                            // Naikkan had laju secara beransur-ansur
                             bloatDelta <= 10 -> {
-                                currentAdaptiveRateMbps = (currentAdaptiveRateMbps + 0.4).coerceAtMost(30.0)
-                                uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                                currentAdaptiveUploadMbps = (currentAdaptiveUploadMbps + 0.4).coerceAtMost(30.0)
+                                currentAdaptiveDownloadMbps = (currentAdaptiveDownloadMbps + 1.2).coerceAtMost(40.0)
+                                uploadTokenBucket.adjustRate(currentAdaptiveUploadMbps)
+                                downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
                             }
                         }
-                        broadcastMetrics(ping, currentAdaptiveRateMbps)
+                        broadcastMetrics(ping, currentAdaptiveUploadMbps)
                     } else if (activeMode == TokenBucket.MODE_GAMING) {
                         broadcastMetrics(ping, 3.8)
                     } else {
@@ -220,8 +242,6 @@ class FlowPacerService : VpnService() {
                     }
                 }
 
-                // Jika talian dikesan mula sesak, periksa semula dengan pantas (1.5s)
-                // Jika talian lapang dan tenang, semak secara santai (3.0s)
                 val nextDelay = if (ping > 150 || ping < 0) 1500L else 3000L
                 delay(nextDelay)
             }
