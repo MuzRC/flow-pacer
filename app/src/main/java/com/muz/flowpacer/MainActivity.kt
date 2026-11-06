@@ -14,6 +14,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.muz.flowpacer.databinding.ActivityMainBinding
+import com.muz.flowpacer.engine.TokenBucket
 import com.muz.flowpacer.service.FlowPacerService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -25,7 +26,6 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
 
-    // Pelancar izin sistem VpnService
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -36,12 +36,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Pelancar izin notifikasi untuk Android 13 (API 33) ke atas
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { _ ->
-        // Pengendalian izin notifikasi latar belakang
-    }
+    ) { _ -> }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,6 +52,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        syncSelectedChipWithService()
         updateUiState()
     }
 
@@ -79,6 +77,56 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnTestPing.setOnClickListener {
             runLatencyTest()
+        }
+
+        // Pengendali pertukaran mod operasi (Chips)
+        binding.chipGroupMode.setOnCheckedStateChangeListener { _, checkedIds ->
+            if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
+
+            val selectedMode = when (checkedIds.first()) {
+                R.id.chipGaming -> TokenBucket.MODE_GAMING
+                R.id.chipUnlimited -> TokenBucket.MODE_UNLIMITED
+                else -> TokenBucket.MODE_AUTO
+            }
+
+            dispatchModeChange(selectedMode)
+            updateModeDiagnostics(selectedMode)
+        }
+    }
+
+    private fun dispatchModeChange(mode: Int) {
+        if (FlowPacerService.isServiceRunning) {
+            val intent = Intent(this, FlowPacerService::class.java).apply {
+                action = FlowPacerService.ACTION_SET_MODE
+                putExtra(FlowPacerService.EXTRA_MODE, mode)
+            }
+            startService(intent)
+        }
+    }
+
+    private fun syncSelectedChipWithService() {
+        when (FlowPacerService.activeMode) {
+            TokenBucket.MODE_GAMING -> binding.chipGaming.isChecked = true
+            TokenBucket.MODE_UNLIMITED -> binding.chipUnlimited.isChecked = true
+            else -> binding.chipAuto.isChecked = true
+        }
+        updateModeDiagnostics(FlowPacerService.activeMode)
+    }
+
+    private fun updateModeDiagnostics(mode: Int) {
+        when (mode) {
+            TokenBucket.MODE_GAMING -> {
+                binding.tvShaperLimit.text = "Terkunci (3.8 Mbps)"
+                binding.tvShaperLimit.setTextColor(Color.parseColor("#FBBF24")) // Kuning permua
+            }
+            TokenBucket.MODE_UNLIMITED -> {
+                binding.tvShaperLimit.text = "Tiada Had (Bypass)"
+                binding.tvShaperLimit.setTextColor(Color.parseColor("#38BDF8")) // Biru bypass
+            }
+            else -> {
+                binding.tvShaperLimit.text = "Dinamik Adaptif"
+                binding.tvShaperLimit.setTextColor(Color.parseColor("#34D399")) // Hijau auto
+            }
         }
     }
 
@@ -116,18 +164,18 @@ class MainActivity : AppCompatActivity() {
 
         if (isRunning) {
             binding.tvStatusTitle.text = getString(R.string.status_running)
-            binding.tvStatusDesc.text = "Kadar muat naik dihadkan (~3.8 Mbps) untuk mengelakkan antrean repeater membuak."
+            binding.tvStatusDesc.text = "Perlindungan aktif. DNS pantas dan kawalan kependaman sedang berjalan."
             binding.imgStatusIcon.setImageResource(android.R.drawable.ic_lock_idle_charging)
-            binding.imgStatusIcon.setColorFilter(Color.parseColor("#34D399")) // Hijau aktif
+            binding.imgStatusIcon.setColorFilter(Color.parseColor("#34D399"))
             binding.btnToggleService.text = getString(R.string.btn_stop)
-            binding.btnToggleService.setBackgroundColor(Color.parseColor("#DC2626")) // Merah henti
+            binding.btnToggleService.setBackgroundColor(Color.parseColor("#DC2626"))
         } else {
             binding.tvStatusTitle.text = getString(R.string.status_idle)
             binding.tvStatusDesc.text = "Trafik bergerak pada laluan lalai tanpa kawalan antrean."
             binding.imgStatusIcon.setImageResource(android.R.drawable.ic_lock_idle_lock)
-            binding.imgStatusIcon.setColorFilter(Color.parseColor("#64748B")) // Kelabu rehat
+            binding.imgStatusIcon.setColorFilter(Color.parseColor("#64748B"))
             binding.btnToggleService.text = getString(R.string.btn_start)
-            binding.btnToggleService.setBackgroundColor(Color.parseColor("#0284C7")) // Biru mula
+            binding.btnToggleService.setBackgroundColor(Color.parseColor("#0284C7"))
         }
     }
 
@@ -143,9 +191,9 @@ class MainActivity : AppCompatActivity() {
                 if (pingMs >= 0) {
                     binding.tvPingValue.text = "$pingMs ms"
                     when {
-                        pingMs < 100 -> binding.tvPingValue.setTextColor(Color.parseColor("#34D399")) // Hijau cemerlang
-                        pingMs < 250 -> binding.tvPingValue.setTextColor(Color.parseColor("#FBBF24")) // Kuning sederhana
-                        else -> binding.tvPingValue.setTextColor(Color.parseColor("#F87171")) // Merah sesak
+                        pingMs < 100 -> binding.tvPingValue.setTextColor(Color.parseColor("#34D399"))
+                        pingMs < 200 -> binding.tvPingValue.setTextColor(Color.parseColor("#FBBF24"))
+                        else -> binding.tvPingValue.setTextColor(Color.parseColor("#F87171"))
                     }
                 } else {
                     binding.tvPingValue.text = "Gagal"
