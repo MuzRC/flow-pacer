@@ -87,7 +87,7 @@ class FlowPacerService : VpnService() {
         startForegroundNotification()
 
         try {
-            // 1. Hidupkan Pelayan Proksi Tempatan
+            // 1. Lancarkan Pelayan Proksi Tempatan
             proxyServer = LocalProxyServer(
                 port = PROXY_PORT,
                 tokenBucket = uploadTokenBucket,
@@ -98,20 +98,20 @@ class FlowPacerService : VpnService() {
                 start()
             }
 
-            // 2. Konfigurasi Terowong VPN Loopback
+            // 2. Bina Terowong VPN Loopback
             val builder = Builder()
                 .setSession(getString(R.string.app_name))
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
 
-            // Kecualikan FlowPacer daripada VPN supaya DNS & sambungan proksi tidak tersangkut
+            // PENTING: Kecualikan aplikasi sendiri supaya DNS dan soket tidak tersangkut
             try {
                 builder.addDisallowedApplication(packageName)
             } catch (e: PackageManager.NameNotFoundException) {
                 e.printStackTrace()
             }
 
-            // Halakan trafik sistem ke proksi tempatan
+            // Halakan trafik HTTP/HTTPS ke pelayan proksi tempatan
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setHttpProxy(
                     ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT)
@@ -121,7 +121,7 @@ class FlowPacerService : VpnService() {
             vpnInterface = builder.establish()
             isServiceRunning = true
 
-            // 3. Jalankan Gelung Pemantau Kependaman Adaptif
+            // 3. Jalankan Pemantauan Kependaman Adaptif
             startAdaptiveFeedbackLoop()
 
         } catch (e: Exception) {
@@ -138,7 +138,8 @@ class FlowPacerService : VpnService() {
 
                 if (activeMode != TokenBucket.MODE_AUTO) continue
 
-                val ping = probeLatency("1.1.1.1", 53, 1200)
+                // Guna Port 443 dengan perlindungan soket VPN
+                val ping = probeLatency("1.1.1.1", 443, 2500)
                 if (ping < 0) continue
 
                 if (ping > 160) {
@@ -154,7 +155,7 @@ class FlowPacerService : VpnService() {
 
     private fun probeLatency(host: String, port: Int, timeoutMs: Int): Long {
         val socket = Socket()
-        protect(socket)
+        protect(socket) // Elak soket ujian dipintas oleh VPN sendiri
         val start = System.currentTimeMillis()
         return try {
             socket.connect(InetSocketAddress(host, port), timeoutMs)
