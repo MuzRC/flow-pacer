@@ -1,250 +1,149 @@
-package com.muz.flowpacer.service
+package com.muz.flowpacer.proxy
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.Context
-import android.content.Intent
-import android.content.pm.ServiceInfo
-import android.net.ProxyInfo
-import android.net.VpnService
-import android.os.Build
-import android.os.ParcelFileDescriptor
-import androidx.core.app.NotificationCompat
-import com.muz.flowpacer.MainActivity
-import com.muz.flowpacer.R
 import com.muz.flowpacer.engine.TokenBucket
-import com.muz.flowpacer.proxy.LocalProxyServer
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.net.Socket
+import kotlin.concurrent.thread
 
-class FlowPacerService : VpnService() {
+class LocalProxyServer(
+    private val port: Int = 10808,
+    private val tokenBucket: TokenBucket,
+    private val onProtectSocket: (Socket) -> Unit
+) {
 
-    private var vpnInterface: ParcelFileDescriptor? = null
-    private var proxyServer: LocalProxyServer? = null
-    private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
-    private var adaptiveMonitorJob: Job? = null
+    private var serverSocket: ServerSocket? = null
+    @Volatile
+    private var isRunning = false
 
-    // Enjin TokenBucket adaptif
-    private val uploadTokenBucket = TokenBucket(
-        maxTokens = 32 * 1024,
-        initialRateMbps = 3.8
-    )
+    fun start() {
+        if (isRunning) return
+        isRunning = true
 
-    private var currentAdaptiveRateMbps = 5.0
-
-    companion object {
-        const val ACTION_START = "com.muz.flowpacer.START"
-        const val ACTION_STOP = "com.muz.flowpacer.STOP"
-        const val ACTION_SET_MODE = "com.muz.flowpacer.SET_MODE"
-        const val EXTRA_MODE = "extra_mode"
-
-        const val NOTIFICATION_CHANNEL_ID = "flowpacer_service_channel"
-        const val NOTIFICATION_ID = 1001
-        const val PROXY_PORT = 10808
-
-        @Volatile
-        var isServiceRunning = false
-            private set
-
-        @Volatile
-        var activeMode = TokenBucket.MODE_AUTO
-            private set
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> stopOptimization()
-            ACTION_SET_MODE -> {
-                val newMode = intent.getIntExtra(EXTRA_MODE, TokenBucket.MODE_AUTO)
-                setOperationalMode(newMode)
-            }
-            ACTION_START -> startOptimization()
-            else -> {
-                if (!isServiceRunning) startOptimization()
-            }
+        thread(name = "FlowPacer-HttpProxy", isDaemon = true) {
+            try {
+                serverSocket = ServerSocket(port, 50, InetAddress.getByName("127.0.0.1"))
+                while (isRunning) {
+                    val clientSocket = serverSocket?.accept() ?: break
+                    thread(name = "FlowPacer-Worker", isDaemon = true) {
+                        handleHttpClient(clientSocket)
+                    }
+                }
+            } catch (_: Exception) {}
         }
-        return START_STICKY
     }
 
-    private fun setOperationalMode(mode: Int) {
-        activeMode = mode
-        uploadTokenBucket.setMode(mode)
-        updateNotification()
-    }
-
-    private fun startOptimization() {
-        if (isServiceRunning) return
-
-        startForegroundNotification()
-
+    fun stop() {
+        isRunning = false
         try {
-            // 1. Lancarkan Pelayan Proksi Tempatan
-            proxyServer = LocalProxyServer(
-                port = PROXY_PORT,
-                tokenBucket = uploadTokenBucket,
-                onProtectSocket = { socket ->
-                    protect(socket)
-                }
-            ).apply {
-                start()
-            }
-
-            // 2. Konfigurasi Terowong VPN Loopback
-            val builder = Builder()
-                .setSession(getString(R.string.app_name))
-                .setMtu(1500)
-                .addAddress("10.0.0.2", 32)
-                
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                builder.setHttpProxy(
-                    ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT)
-                )
-            }
-
-            vpnInterface = builder.establish()
-            isServiceRunning = true
-
-            // 3. Lancarkan Gelung Pemantau Adaptif
-            startAdaptiveFeedbackLoop()
-
-        } catch (e: Exception) {
-            e.printStackTrace()
-            stopOptimization()
-        }
+            serverSocket?.close()
+            serverSocket = null
+        } catch (_: Exception) {}
     }
 
-    private fun startAdaptiveFeedbackLoop() {
-        adaptiveMonitorJob?.cancel()
-        adaptiveMonitorJob = serviceScope.launch {
-            while (isActive) {
-                delay(4000) // Pantau setiap 4 saat
+    private fun handleHttpClient(clientSocket: Socket) {
+        var upstreamSocket: Socket? = null
+        try {
+            clientSocket.tcpNoDelay = true
+            val clientIn = clientSocket.getInputStream()
+            val clientOut = clientSocket.getOutputStream()
 
-                if (activeMode != TokenBucket.MODE_AUTO) continue
+            // Baca baris pertama CONNECT byte demi byte tanpa merosakkan bait TLS
+            val requestLine = readLineByteByByte(clientIn) ?: return
+            val tokens = requestLine.split(" ")
 
-                val ping = probeLatency("1.1.1.1", 53, 1200)
-                if (ping < 0) continue // Gagal dapat bacaan, abaikan kitaran ini
-
-                // Logik Penstabilan Kependaman:
-                if (ping > 160) {
-                    // Dikesan lonjakan bufferbloat: tekan brek 25% serta-merta
-                    currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.75).coerceAtLeast(1.5)
-                    uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
-                } else if (ping < 85) {
-                    // Talian tenang & stabil: buka injap perlahan-lahan (+0.8 Mbps)
-                    currentAdaptiveRateMbps = (currentAdaptiveRateMbps + 0.8).coerceAtMost(40.0)
-                    uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
-                }
+            if (tokens.size < 2 || !tokens[0].equals("CONNECT", ignoreCase = true)) {
+                clientSocket.close()
+                return
             }
-        }
-    }
 
-    private fun probeLatency(host: String, port: Int, timeoutMs: Int): Long {
-        val socket = Socket()
-        protect(socket) // Pastikan socket ujian tidak termasuk dalam antrean VPN
-        val start = System.currentTimeMillis()
-        return try {
-            socket.connect(InetSocketAddress(host, port), timeoutMs)
-            val duration = System.currentTimeMillis() - start
-            socket.close()
-            duration
+            // Baca header sehingga baris kosong (\r\n\r\n)
+            while (true) {
+                val headerLine = readLineByteByByte(clientIn)
+                if (headerLine.isNullOrEmpty()) break
+            }
+
+            val hostPort = tokens[1].split(":")
+            val targetHost = hostPort[0]
+            val targetPort = if (hostPort.size > 1) hostPort[1].toInt() else 443
+
+            // Buka soket keluar ke pelayan sasaran dan lindungi daripada VPN
+            upstreamSocket = Socket()
+            upstreamSocket.tcpNoDelay = true
+            onProtectSocket(upstreamSocket)
+            upstreamSocket.connect(InetSocketAddress(targetHost, targetPort), 10000)
+
+            // Maklumkan sambungan terowong HTTP berjaya
+            val response = "HTTP/1.1 200 Connection Established\r\n\r\n"
+            clientOut.write(response.toByteArray(Charsets.US_ASCII))
+            clientOut.flush()
+
+            val upstreamIn = upstreamSocket.getInputStream()
+            val upstreamOut = upstreamSocket.getOutputStream()
+
+            // Alirkan data: Muat naik dikawal TokenBucket, muat turun direct
+            val uploadThread = thread(name = "Upload-Limiter", isDaemon = true) {
+                pipeWithRateLimit(clientIn, upstreamOut)
+            }
+
+            pipeDirect(upstreamIn, clientOut)
+            uploadThread.join()
+
         } catch (_: Exception) {
-            -1L
+        } finally {
+            try { clientSocket.close() } catch (_: Exception) {}
+            try { upstreamSocket?.close() } catch (_: Exception) {}
         }
     }
 
-    private fun stopOptimization() {
-        adaptiveMonitorJob?.cancel()
-        adaptiveMonitorJob = null
-
-        try {
-            proxyServer?.stop()
-            proxyServer = null
-
-            vpnInterface?.close()
-            vpnInterface = null
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        isServiceRunning = false
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-    }
-
-    private fun startForegroundNotification() {
-        createNotificationChannel()
-        val notification = buildNotification()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
-    }
-
-    private fun updateNotification() {
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, buildNotification())
-    }
-
-    private fun buildNotification(): Notification {
-        val mainIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            mainIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        val modeLabel = when (activeMode) {
-            TokenBucket.MODE_GAMING -> "Mod Permua (Terkunci)"
-            TokenBucket.MODE_UNLIMITED -> "Mod Bebas (Tiada Had)"
-            else -> "Mod Auto-Pintar (Adaptif)"
-        }
-
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(getString(R.string.notif_title_active))
-            .setContentText("Profil Semasa: $modeLabel")
-            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                getString(R.string.notif_channel_name),
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = getString(R.string.notif_channel_desc)
-                setShowBadge(false)
+    /**
+     * Membaca satu baris teks tanpa menelan bait tambahan dalam stream
+     */
+    private fun readLineByteByByte(input: InputStream): String? {
+        val sb = StringBuilder()
+        while (isRunning) {
+            val b = input.read()
+            if (b == -1) {
+                return if (sb.isEmpty()) null else sb.toString()
             }
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(channel)
+            if (b == '\n'.code) break
+            if (b != '\r'.code) {
+                sb.append(b.toChar())
+            }
         }
+        return sb.toString()
     }
 
-    override fun onDestroy() {
-        serviceScope.cancel()
-        stopOptimization()
-        super.onDestroy()
+    private fun pipeWithRateLimit(input: InputStream, output: OutputStream) {
+        val buffer = ByteArray(8192)
+        try {
+            while (isRunning) {
+                val bytesRead = input.read(buffer)
+                if (bytesRead == -1) break
+
+                val delayMs = tokenBucket.acquire(bytesRead)
+                if (delayMs > 0) {
+                    Thread.sleep(delayMs)
+                }
+
+                output.write(buffer, 0, bytesRead)
+                output.flush()
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun pipeDirect(input: InputStream, output: OutputStream) {
+        val buffer = ByteArray(16384)
+        try {
+            while (isRunning) {
+                val bytesRead = input.read(buffer)
+                if (bytesRead == -1) break
+                output.write(buffer, 0, bytesRead)
+                output.flush()
+            }
+        } catch (_: Exception) {}
     }
 }
