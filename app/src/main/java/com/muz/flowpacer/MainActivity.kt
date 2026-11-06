@@ -2,7 +2,10 @@ package com.muz.flowpacer
 
 import android.Manifest
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.VpnService
@@ -21,6 +24,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -40,10 +44,55 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
+    // Penerima data langsung (Live Broadcast) dari FlowPacerService
+    private val metricsReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == FlowPacerService.ACTION_METRICS_UPDATE) {
+                val ping = intent.getLongExtra(FlowPacerService.EXTRA_PING, -1L)
+                val rateMbps = intent.getDoubleExtra(FlowPacerService.EXTRA_RATE_MBPS, -1.0)
+
+                // Kemas kini paparan ping secara live
+                if (ping >= 0) {
+                    binding.tvPingValue.text = "$ping ms"
+                    when {
+                        ping < 100 -> binding.tvPingValue.setTextColor(Color.parseColor("#34D399")) // Hijau
+                        ping < 200 -> binding.tvPingValue.setTextColor(Color.parseColor("#FBBF24")) // Kuning
+                        else -> binding.tvPingValue.setTextColor(Color.parseColor("#F87171")) // Merah
+                    }
+                }
+
+                // Kemas kini angka siling muat naik dinamik (Live Mbps)
+                when (FlowPacerService.activeMode) {
+                    TokenBucket.MODE_GAMING -> {
+                        binding.tvShaperLimit.text = "Terkunci (3.8 Mbps)"
+                        binding.tvShaperLimit.setTextColor(Color.parseColor("#FBBF24"))
+                    }
+                    TokenBucket.MODE_UNLIMITED -> {
+                        binding.tvShaperLimit.text = "Tiada Had (Bypass)"
+                        binding.tvShaperLimit.setTextColor(Color.parseColor("#38BDF8"))
+                    }
+                    else -> {
+                        if (rateMbps > 0) {
+                            binding.tvShaperLimit.text = String.format(Locale.US, "%.1f Mbps (Auto)", rateMbps)
+                        } else {
+                            binding.tvShaperLimit.text = "Dinamik Adaptif"
+                        }
+                        binding.tvShaperLimit.setTextColor(Color.parseColor("#34D399"))
+                    }
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // Pastikan paparan cip sentiasa bermula di kedudukan paling kiri
+        binding.scrollChips.post {
+            binding.scrollChips.scrollTo(0, 0)
+        }
 
         checkNotificationPermission()
         setupListeners()
@@ -54,6 +103,20 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         syncSelectedChipWithService()
         updateUiState()
+
+        val filter = IntentFilter(FlowPacerService.ACTION_METRICS_UPDATE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(metricsReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(metricsReceiver, filter)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        try {
+            unregisterReceiver(metricsReceiver)
+        } catch (_: Exception) {}
     }
 
     private fun checkNotificationPermission() {
@@ -79,7 +142,6 @@ class MainActivity : AppCompatActivity() {
             runLatencyTest()
         }
 
-        // Pengendali pertukaran mod operasi (Chips)
         binding.chipGroupMode.setOnCheckedStateChangeListener { _, checkedIds ->
             if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
 
@@ -117,15 +179,15 @@ class MainActivity : AppCompatActivity() {
         when (mode) {
             TokenBucket.MODE_GAMING -> {
                 binding.tvShaperLimit.text = "Terkunci (3.8 Mbps)"
-                binding.tvShaperLimit.setTextColor(Color.parseColor("#FBBF24")) // Kuning permua
+                binding.tvShaperLimit.setTextColor(Color.parseColor("#FBBF24"))
             }
             TokenBucket.MODE_UNLIMITED -> {
                 binding.tvShaperLimit.text = "Tiada Had (Bypass)"
-                binding.tvShaperLimit.setTextColor(Color.parseColor("#38BDF8")) // Biru bypass
+                binding.tvShaperLimit.setTextColor(Color.parseColor("#38BDF8"))
             }
             else -> {
                 binding.tvShaperLimit.text = "Dinamik Adaptif"
-                binding.tvShaperLimit.setTextColor(Color.parseColor("#34D399")) // Hijau auto
+                binding.tvShaperLimit.setTextColor(Color.parseColor("#34D399"))
             }
         }
     }
@@ -184,7 +246,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnTestPing.isEnabled = false
 
         lifecycleScope.launch(Dispatchers.IO) {
-            val pingMs = measureLatency("1.1.1.1", 53, 1500)
+            val pingMs = measureLatency("1.1.1.1", 443, 2500)
 
             withContext(Dispatchers.Main) {
                 binding.btnTestPing.isEnabled = true
