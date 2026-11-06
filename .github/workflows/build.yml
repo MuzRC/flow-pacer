@@ -31,6 +31,9 @@ jobs:
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/release.keystore
 
+      - name: Pasang Gradle Wrapper
+        run: gradle wrapper
+
       - name: Beri Kebenaran Pelaksanaan Gradlew
         run: chmod +x gradlew
 
@@ -40,7 +43,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleRelease --no-daemon
-
+        
       - name: Muat Naik Fail APK (Artifact)
         uses: actions/upload-artifact@v4
         with:
