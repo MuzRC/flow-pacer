@@ -34,13 +34,11 @@ class FlowPacerService : VpnService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
     private var adaptiveMonitorJob: Job? = null
 
-    // Enjin Kawalan Muat Naik
     private val uploadTokenBucket = TokenBucket(
         maxTokens = 16 * 1024,
         initialRateMbps = 3.8
     )
 
-    // Enjin Kawalan Muat Turun (Menghalang Repeater daripada tenggelam)
     private val downloadTokenBucket = TokenBucket(
         maxTokens = 32 * 1024,
         initialRateMbps = 16.0
@@ -59,6 +57,7 @@ class FlowPacerService : VpnService() {
         const val EXTRA_MODE = "extra_mode"
         const val EXTRA_PING = "extra_ping"
         const val EXTRA_RATE_MBPS = "extra_rate_mbps"
+        const val EXTRA_DL_RATE_MBPS = "extra_dl_rate_mbps"
         const val EXTRA_TX_BYTES = "extra_tx_bytes"
         const val EXTRA_RX_BYTES = "extra_rx_bytes"
 
@@ -105,17 +104,14 @@ class FlowPacerService : VpnService() {
 
         if (mode == TokenBucket.MODE_GAMING) {
             uploadTokenBucket.adjustRate(3.8)
-            downloadTokenBucket.adjustRate(12.0) // Had muat turun ketat untuk kunci kependaman
+            downloadTokenBucket.adjustRate(12.0)
         }
 
         updateNotification()
 
-        val reportedRate = when (mode) {
-            TokenBucket.MODE_GAMING -> 3.8
-            TokenBucket.MODE_UNLIMITED -> -1.0
-            else -> currentAdaptiveUploadMbps
-        }
-        broadcastMetrics(-1L, reportedRate)
+        val reportedUl = if (mode == TokenBucket.MODE_GAMING) 3.8 else if (mode == TokenBucket.MODE_UNLIMITED) -1.0 else currentAdaptiveUploadMbps
+        val reportedDl = if (mode == TokenBucket.MODE_GAMING) 12.0 else if (mode == TokenBucket.MODE_UNLIMITED) -1.0 else currentAdaptiveDownloadMbps
+        broadcastMetrics(-1L, reportedUl, reportedDl)
     }
 
     private fun startOptimization() {
@@ -198,8 +194,7 @@ class FlowPacerService : VpnService() {
                         val bloatDelta = ping - baselinePing
 
                         when {
-                            // 1. ZON CEMAS (Ping > 300ms atau lonjakan mendadak > 180ms):
-                            // Pancung kedua-dua laluan! Muat naik ke 1.0 Mbps & Muat turun ke 4.0 Mbps serta-merta!
+                            // 1. ZON CEMAS (Ping > 300ms atau lonjakan mendadak > 180ms)
                             ping > 300 || bloatDelta > 180 -> {
                                 currentAdaptiveUploadMbps = 1.0
                                 currentAdaptiveDownloadMbps = 4.0
@@ -207,8 +202,7 @@ class FlowPacerService : VpnService() {
                                 downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
                             }
 
-                            // 2. SESAK TINGGI (Lonjakan > 60ms dari paras lantai):
-                            // Cantas 40% muat naik dan 30% muat turun
+                            // 2. SESAK TINGGI (Lonjakan > 60ms dari paras lantai)
                             bloatDelta > 60 -> {
                                 currentAdaptiveUploadMbps = (currentAdaptiveUploadMbps * 0.60).coerceAtLeast(1.2)
                                 currentAdaptiveDownloadMbps = (currentAdaptiveDownloadMbps * 0.70).coerceAtLeast(6.0)
@@ -216,8 +210,7 @@ class FlowPacerService : VpnService() {
                                 downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
                             }
 
-                            // 3. MULA MERAYAP (Lonjakan > 20ms dari lantai):
-                            // Tahan sedikit aliran
+                            // 3. MULA MERAYAP (Lonjakan > 20ms dari paras lantai)
                             bloatDelta > 20 -> {
                                 currentAdaptiveUploadMbps = (currentAdaptiveUploadMbps * 0.85).coerceAtLeast(1.5)
                                 currentAdaptiveDownloadMbps = (currentAdaptiveDownloadMbps * 0.90).coerceAtLeast(10.0)
@@ -225,8 +218,7 @@ class FlowPacerService : VpnService() {
                                 downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
                             }
 
-                            // 4. TALIAN TENANG & LAPANG (Rapat dengan lantai <= 10ms):
-                            // Naikkan had laju secara beransur-ansur
+                            // 4. TALIAN TENANG & LAPANG (Rapat dengan lantai <= 10ms)
                             bloatDelta <= 10 -> {
                                 currentAdaptiveUploadMbps = (currentAdaptiveUploadMbps + 0.4).coerceAtMost(30.0)
                                 currentAdaptiveDownloadMbps = (currentAdaptiveDownloadMbps + 1.2).coerceAtMost(40.0)
@@ -234,11 +226,11 @@ class FlowPacerService : VpnService() {
                                 downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
                             }
                         }
-                        broadcastMetrics(ping, currentAdaptiveUploadMbps)
+                        broadcastMetrics(ping, currentAdaptiveUploadMbps, currentAdaptiveDownloadMbps)
                     } else if (activeMode == TokenBucket.MODE_GAMING) {
-                        broadcastMetrics(ping, 3.8)
+                        broadcastMetrics(ping, 3.8, 12.0)
                     } else {
-                        broadcastMetrics(ping, -1.0)
+                        broadcastMetrics(ping, -1.0, -1.0)
                     }
                 }
 
@@ -248,13 +240,14 @@ class FlowPacerService : VpnService() {
         }
     }
 
-    private fun broadcastMetrics(ping: Long, rateMbps: Double) {
+    private fun broadcastMetrics(ping: Long, ulMbps: Double, dlMbps: Double) {
         val tx = proxyServer?.totalBytesUploaded?.get() ?: 0L
         val rx = proxyServer?.totalBytesDownloaded?.get() ?: 0L
 
         val intent = Intent(ACTION_METRICS_UPDATE).apply {
             putExtra(EXTRA_PING, ping)
-            putExtra(EXTRA_RATE_MBPS, rateMbps)
+            putExtra(EXTRA_RATE_MBPS, ulMbps)
+            putExtra(EXTRA_DL_RATE_MBPS, dlMbps)
             putExtra(EXTRA_TX_BYTES, tx)
             putExtra(EXTRA_RX_BYTES, rx)
             setPackage(packageName)
