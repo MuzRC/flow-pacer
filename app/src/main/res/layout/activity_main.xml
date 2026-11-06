@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true"
@@ -12,7 +11,6 @@
         android:layout_height="wrap_content"
         android:padding="20dp">
 
-        <!-- Tajuk Utama Aplikasi -->
         <TextView
             android:id="@+id/tvAppTitle"
             android:layout_width="wrap_content"
@@ -86,7 +84,7 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- Pilihan Profil Operasi -->
+        <!-- Profil Operasi -->
         <TextView
             android:id="@+id/tvModeLabel"
             android:layout_width="wrap_content"
@@ -99,7 +97,6 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/cardStatus" />
 
-        <!-- Selesai isu cip terpotong: overScrollMode never & clipToPadding false -->
         <HorizontalScrollView
             android:id="@+id/scrollChips"
             android:layout_width="0dp"
@@ -145,14 +142,79 @@
                     style="@style/Widget.MaterialComponents.Chip.Choice"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="🚀 Tiada Had (Bypass)"
+                    android:text="🚀 Tiada Had"
                     android:textColor="#E2E8F0"
                     app:chipBackgroundColor="#334155" />
 
             </com.google.android.material.chip.ChipGroup>
         </HorizontalScrollView>
 
-        <!-- Kad Diagnostik Rangkaian -->
+        <!-- Ciri 5: Pemilihan Pelayan DNS -->
+        <TextView
+            android:id="@+id/tvDnsLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="PELAYAN DNS TERPILIH"
+            android:textColor="#64748B"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/scrollChips" />
+
+        <HorizontalScrollView
+            android:id="@+id/scrollDns"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:clipToPadding="false"
+            android:fillViewport="true"
+            android:overScrollMode="never"
+            android:scrollbars="none"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/tvDnsLabel">
+
+            <com.google.android.material.chip.ChipGroup
+                android:id="@+id/chipGroupDns"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                app:singleLine="true"
+                app:singleSelection="true"
+                app:selectionRequired="true">
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chipDnsCloudflare"
+                    style="@style/Widget.MaterialComponents.Chip.Choice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:checked="true"
+                    android:text="🛡️ Cloudflare (1.1.1.1)"
+                    android:textColor="#E2E8F0"
+                    app:chipBackgroundColor="#334155" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chipDnsAdGuard"
+                    style="@style/Widget.MaterialComponents.Chip.Choice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🚫 AdGuard (Sekat Iklan)"
+                    android:textColor="#E2E8F0"
+                    app:chipBackgroundColor="#334155" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chipDnsGoogle"
+                    style="@style/Widget.MaterialComponents.Chip.Choice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🌐 Google (8.8.8.8)"
+                    android:textColor="#E2E8F0"
+                    app:chipBackgroundColor="#334155" />
+
+            </com.google.android.material.chip.ChipGroup>
+        </HorizontalScrollView>
+
+        <!-- Kad Diagnostik Rangkaian & Metrik Kuota -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardDiagnostics"
             android:layout_width="0dp"
@@ -165,7 +227,7 @@
             app:strokeWidth="1dp"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/scrollChips">
+            app:layout_constraintTop_toBottomOf="@id/scrollDns">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -176,7 +238,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Metrik Operasi Semasa"
+                    android:text="Metrik Operasi &amp; Data Sesi"
                     android:textColor="#E2E8F0"
                     android:textSize="14sp"
                     android:textStyle="bold" />
@@ -196,7 +258,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Kependaman (Ping Cloudflare)"
+                        android:text="Kependaman Semasa"
                         android:textColor="#94A3B8"
                         android:textSize="13sp" />
 
@@ -213,14 +275,14 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
+                    android:layout_marginTop="8dp"
                     android:orientation="horizontal">
 
                     <TextView
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Kawalan Siling Muat Naik"
+                        android:text="Siling Muat Naik Semasa"
                         android:textColor="#94A3B8"
                         android:textSize="13sp" />
 
@@ -234,8 +296,47 @@
                         android:textStyle="bold" />
                 </LinearLayout>
 
+                <!-- Ciri 4: Baris Statistik Penggunaan Data Sesi -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Trafik Terkawal Sesi"
+                        android:textColor="#94A3B8"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/tvSessionTraffic"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="DL: 0 B | UL: 0 B"
+                        android:textColor="#A78BFA"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
+
+        <!-- Ciri 2: Butang Pengecualian Aplikasi (Split Tunneling) -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnExcludedApps"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_marginTop="8dp"
+            android:text="⚙️ Urus Aplikasi Dikecualikan (Split Tunnel)"
+            android:textColor="#94A3B8"
+            android:textSize="13sp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/cardDiagnostics" />
 
         <!-- Butang Uji Ping -->
         <com.google.android.material.button.MaterialButton
@@ -243,14 +344,14 @@
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="0dp"
             android:layout_height="52dp"
-            android:layout_marginTop="20dp"
+            android:layout_marginTop="6dp"
             android:text="@string/btn_test_ping"
             android:textColor="#E2E8F0"
             app:cornerRadius="12dp"
             app:strokeColor="#475569"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/cardDiagnostics" />
+            app:layout_constraintTop_toBottomOf="@id/btnExcludedApps" />
 
         <!-- Butang Togol Utama -->
         <com.google.android.material.button.MaterialButton
