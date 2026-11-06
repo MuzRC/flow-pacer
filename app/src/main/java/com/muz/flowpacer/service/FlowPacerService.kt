@@ -103,11 +103,7 @@ class FlowPacerService : VpnService() {
                 .setSession(getString(R.string.app_name))
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
-                .addDnsServer("1.1.1.1")
-                .addDnsServer("1.0.0.1")
-                .addRoute("1.1.1.1", 32)
-                .addRoute("1.0.0.1", 32)
-
+                
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setHttpProxy(
                     ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT)
