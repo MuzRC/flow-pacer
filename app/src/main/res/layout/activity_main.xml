@@ -61,7 +61,6 @@
                     android:id="@+id/imgStatusIcon"
                     android:layout_width="56dp"
                     android:layout_height="56dp"
-                    android:src="@android:drawable/ic_lock_idle_lock"
                     app:tint="#64748B" />
 
                 <TextView
@@ -87,7 +86,7 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- Pilihan Profil Operasi (ChipGroup) -->
+        <!-- Pilihan Profil Operasi -->
         <TextView
             android:id="@+id/tvModeLabel"
             android:layout_width="wrap_content"
@@ -100,11 +99,15 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/cardStatus" />
 
+        <!-- Selesai isu cip terpotong: overScrollMode never & clipToPadding false -->
         <HorizontalScrollView
             android:id="@+id/scrollChips"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
+            android:clipToPadding="false"
+            android:fillViewport="true"
+            android:overScrollMode="never"
             android:scrollbars="none"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
@@ -114,6 +117,7 @@
                 android:id="@+id/chipGroupMode"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                app:singleLine="true"
                 app:singleSelection="true"
                 app:selectionRequired="true">
 
@@ -224,7 +228,7 @@
                         android:id="@+id/tvShaperLimit"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Dinamik (Auto)"
+                        android:text="Dinamik Adaptif"
                         android:textColor="#34D399"
                         android:textSize="13sp"
                         android:textStyle="bold" />
