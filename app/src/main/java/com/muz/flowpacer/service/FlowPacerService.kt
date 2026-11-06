@@ -16,21 +16,37 @@ import com.muz.flowpacer.MainActivity
 import com.muz.flowpacer.R
 import com.muz.flowpacer.engine.TokenBucket
 import com.muz.flowpacer.proxy.LocalProxyServer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import java.net.InetSocketAddress
+import java.net.Socket
 
 class FlowPacerService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var proxyServer: LocalProxyServer? = null
+    private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
+    private var adaptiveMonitorJob: Job? = null
 
-    // Had siling muat naik: ~3.8 Mbps (498,000 bait/saat) dengan kapasiti lonjakan 32 KB
+    // Enjin TokenBucket adaptif
     private val uploadTokenBucket = TokenBucket(
         maxTokens = 32 * 1024,
-        refillRatePerSec = (3.8 * 1024 * 1024 / 8).toLong()
+        initialRateMbps = 3.8
     )
+
+    private var currentAdaptiveRateMbps = 5.0
 
     companion object {
         const val ACTION_START = "com.muz.flowpacer.START"
         const val ACTION_STOP = "com.muz.flowpacer.STOP"
+        const val ACTION_SET_MODE = "com.muz.flowpacer.SET_MODE"
+        const val EXTRA_MODE = "extra_mode"
+
         const val NOTIFICATION_CHANNEL_ID = "flowpacer_service_channel"
         const val NOTIFICATION_ID = 1001
         const val PROXY_PORT = 10808
@@ -38,11 +54,19 @@ class FlowPacerService : VpnService() {
         @Volatile
         var isServiceRunning = false
             private set
+
+        @Volatile
+        var activeMode = TokenBucket.MODE_AUTO
+            private set
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopOptimization()
+            ACTION_SET_MODE -> {
+                val newMode = intent.getIntExtra(EXTRA_MODE, TokenBucket.MODE_AUTO)
+                setOperationalMode(newMode)
+            }
             ACTION_START -> startOptimization()
             else -> {
                 if (!isServiceRunning) startOptimization()
@@ -51,13 +75,19 @@ class FlowPacerService : VpnService() {
         return START_STICKY
     }
 
+    private fun setOperationalMode(mode: Int) {
+        activeMode = mode
+        uploadTokenBucket.setMode(mode)
+        updateNotification()
+    }
+
     private fun startOptimization() {
         if (isServiceRunning) return
 
         startForegroundNotification()
 
         try {
-            // 1. Lancarkan Pelayan Proksi Tempatan dengan fungsi protect()
+            // 1. Lancarkan Pelayan Proksi Tempatan
             proxyServer = LocalProxyServer(
                 port = PROXY_PORT,
                 tokenBucket = uploadTokenBucket,
@@ -68,18 +98,16 @@ class FlowPacerService : VpnService() {
                 start()
             }
 
-            // 2. Konfigurasi Terowong VPN Tempatan
+            // 2. Konfigurasi Terowong VPN Loopback
             val builder = Builder()
                 .setSession(getString(R.string.app_name))
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
-                // Kunci pelayan DNS berprestasi tinggi
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("1.0.0.1")
                 .addRoute("1.1.1.1", 32)
                 .addRoute("1.0.0.1", 32)
 
-            // Pautkan proksi kawalan trafik jika peranti Android 10 (API 29) ke atas
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setHttpProxy(
                     ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT)
@@ -89,13 +117,58 @@ class FlowPacerService : VpnService() {
             vpnInterface = builder.establish()
             isServiceRunning = true
 
+            // 3. Lancarkan Gelung Pemantau Adaptif
+            startAdaptiveFeedbackLoop()
+
         } catch (e: Exception) {
             e.printStackTrace()
             stopOptimization()
         }
     }
 
+    private fun startAdaptiveFeedbackLoop() {
+        adaptiveMonitorJob?.cancel()
+        adaptiveMonitorJob = serviceScope.launch {
+            while (isActive) {
+                delay(4000) // Pantau setiap 4 saat
+
+                if (activeMode != TokenBucket.MODE_AUTO) continue
+
+                val ping = probeLatency("1.1.1.1", 53, 1200)
+                if (ping < 0) continue // Gagal dapat bacaan, abaikan kitaran ini
+
+                // Logik Penstabilan Kependaman:
+                if (ping > 160) {
+                    // Dikesan lonjakan bufferbloat: tekan brek 25% serta-merta
+                    currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.75).coerceAtLeast(1.5)
+                    uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                } else if (ping < 85) {
+                    // Talian tenang & stabil: buka injap perlahan-lahan (+0.8 Mbps)
+                    currentAdaptiveRateMbps = (currentAdaptiveRateMbps + 0.8).coerceAtMost(40.0)
+                    uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                }
+            }
+        }
+    }
+
+    private fun probeLatency(host: String, port: Int, timeoutMs: Int): Long {
+        val socket = Socket()
+        protect(socket) // Pastikan socket ujian tidak termasuk dalam antrean VPN
+        val start = System.currentTimeMillis()
+        return try {
+            socket.connect(InetSocketAddress(host, port), timeoutMs)
+            val duration = System.currentTimeMillis() - start
+            socket.close()
+            duration
+        } catch (_: Exception) {
+            -1L
+        }
+    }
+
     private fun stopOptimization() {
+        adaptiveMonitorJob?.cancel()
+        adaptiveMonitorJob = null
+
         try {
             proxyServer?.stop()
             proxyServer = null
@@ -113,25 +186,7 @@ class FlowPacerService : VpnService() {
 
     private fun startForegroundNotification() {
         createNotificationChannel()
-
-        val mainIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            mainIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        val notification: Notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(getString(R.string.notif_title_active))
-            .setContentText(getString(R.string.notif_desc_active))
-            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+        val notification = buildNotification()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
@@ -142,6 +197,38 @@ class FlowPacerService : VpnService() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+    }
+
+    private fun updateNotification() {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun buildNotification(): Notification {
+        val mainIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            mainIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val modeLabel = when (activeMode) {
+            TokenBucket.MODE_GAMING -> "Mod Permua (Terkunci)"
+            TokenBucket.MODE_UNLIMITED -> "Mod Bebas (Tiada Had)"
+            else -> "Mod Auto-Pintar (Adaptif)"
+        }
+
+        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(getString(R.string.notif_title_active))
+            .setContentText("Profil Semasa: $modeLabel")
+            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
     }
 
     private fun createNotificationChannel() {
@@ -160,6 +247,7 @@ class FlowPacerService : VpnService() {
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
         stopOptimization()
         super.onDestroy()
     }
