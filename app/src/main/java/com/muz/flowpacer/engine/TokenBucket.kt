@@ -1,18 +1,17 @@
 package com.muz.flowpacer.engine
 
 /**
- * Algoritma Token Bucket Adaptif & Pelbagai Profil.
- * Mengawal kadar aliran muat naik secara dinamik mengikut kependaman rangkaian,
- * mengunci had selamat untuk permua, atau membenarkan laluan bebas 100% tanpa had.
+ * Enjin Token Bucket Adaptif dengan Had Lonjakan Mikro (Micro-burst Limiter).
+ * Mengelakkan lambakan paket serentak yang membanjiri penampan repeater Wi-Fi.
  */
 class TokenBucket(
-    private var maxTokens: Long = 32 * 1024,
+    private var maxTokens: Long = 16 * 1024,
     initialRateMbps: Double = 3.8
 ) {
     companion object {
         const val MODE_AUTO = 0      // Auto-Pintar (Adaptif ikut kependaman semasa)
-        const val MODE_GAMING = 1    // Kunci Permua (Strict ~3.8 Mbps anti-jitter)
-        const val MODE_UNLIMITED = 2 // Tiada Had (Bypass 100% bila talian lapang)
+        const val MODE_GAMING = 1    // Kunci Permua (Strict 3.8 Mbps anti-jitter)
+        const val MODE_UNLIMITED = 2 // Tiada Had (Bypass 100%)
     }
 
     @Volatile
@@ -25,47 +24,39 @@ class TokenBucket(
     private var availableTokens: Long = maxTokens
     private var lastRefillTimestamp: Long = System.nanoTime()
 
-    /**
-     * Menukar profil operasi aplikasi secara langsung semasa perkhidmatan berjalan.
-     */
     fun setMode(mode: Int) {
         currentMode = mode
         if (mode == MODE_GAMING) {
-            adjustRate(3.8) // Kunci had siling selamat untuk memastikan tiada lonjakan ping
+            adjustRate(3.8)
         }
     }
 
-    /**
-     * Melaraskan kadar pelepasan bait sesaat secara dinamik (digunakan oleh enjin Auto-Adaptif).
-     */
     @Synchronized
     fun adjustRate(mbps: Double) {
-        val clampedMbps = mbps.coerceIn(0.5, 100.0) // Julat selamat antara 500 Kbps hingga 100 Mbps
+        val clampedMbps = mbps.coerceIn(0.8, 40.0)
         refillRatePerSec = (clampedMbps * 1024 * 1024 / 8).toLong()
-        
-        // Sesuaikan saiz lonjakan (burst) berkadaran dengan kelajuan (anggaran 100ms buffer)
-        maxTokens = ((clampedMbps * 1024 * 1024 / 8) * 0.1).toLong().coerceIn(16 * 1024, 256 * 1024)
+
+        // Hadkan saiz burst kepada ~40ms trafik sahaja (antara 4KB hingga 24KB)
+        // Ini memastikan data keluar secara titisan licin, bukan pancutan mengejut
+        maxTokens = ((clampedMbps * 1024 * 1024 / 8) * 0.04).toLong().coerceIn(4 * 1024, 24 * 1024)
+        if (availableTokens > maxTokens) {
+            availableTokens = maxTokens
+        }
     }
 
-    /**
-     * Memeriksa dan menahan aliran data keluar jika melebihi kuota semasa.
-     */
     @Synchronized
     fun acquire(bytes: Int): Long {
-        // Jika mod tiada had aktif, lepaskan serta-merta (kelewatan 0 ms)
         if (currentMode == MODE_UNLIMITED) {
             return 0L
         }
 
         refill()
 
-        // Jika baki token mencukupi
         if (availableTokens >= bytes) {
             availableTokens -= bytes
             return 0L
         }
 
-        // Kira kelewatan jika had kuota saat ini sudah habis
         val deficit = bytes - availableTokens
         val waitTimeNanos = (deficit * 1_000_000_000L) / refillRatePerSec
         val waitTimeMillis = (waitTimeNanos / 1_000_000L).coerceAtLeast(1L)
