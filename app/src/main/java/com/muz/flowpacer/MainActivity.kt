@@ -49,7 +49,8 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == FlowPacerService.ACTION_METRICS_UPDATE) {
                 val ping = intent.getLongExtra(FlowPacerService.EXTRA_PING, -1L)
-                val rateMbps = intent.getDoubleExtra(FlowPacerService.EXTRA_RATE_MBPS, -1.0)
+                val ulMbps = intent.getDoubleExtra(FlowPacerService.EXTRA_RATE_MBPS, -1.0)
+                val dlMbps = intent.getDoubleExtra(FlowPacerService.EXTRA_DL_RATE_MBPS, -1.0)
                 val tx = intent.getLongExtra(FlowPacerService.EXTRA_TX_BYTES, 0L)
                 val rx = intent.getLongExtra(FlowPacerService.EXTRA_RX_BYTES, 0L)
 
@@ -62,9 +63,10 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
+                // Paparkan kedua-dua siling (Muat Naik & Muat Turun)
                 when (FlowPacerService.activeMode) {
                     TokenBucket.MODE_GAMING -> {
-                        binding.tvShaperLimit.text = "Terkunci (3.8 Mbps)"
+                        binding.tvShaperLimit.text = "Kunci (UL: 3.8M | DL: 12M)"
                         binding.tvShaperLimit.setTextColor(Color.parseColor("#FBBF24"))
                     }
                     TokenBucket.MODE_UNLIMITED -> {
@@ -72,8 +74,8 @@ class MainActivity : AppCompatActivity() {
                         binding.tvShaperLimit.setTextColor(Color.parseColor("#38BDF8"))
                     }
                     else -> {
-                        if (rateMbps > 0) {
-                            binding.tvShaperLimit.text = String.format(Locale.US, "%.1f Mbps (Auto)", rateMbps)
+                        if (ulMbps > 0 && dlMbps > 0) {
+                            binding.tvShaperLimit.text = String.format(Locale.US, "UL: %.1fM | DL: %.0fM", ulMbps, dlMbps)
                         } else {
                             binding.tvShaperLimit.text = "Dinamik Adaptif"
                         }
@@ -81,7 +83,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // Ciri 4: Papar statistik penggunaan sesi (DL/UL)
                 binding.tvSessionTraffic.text = "DL: ${formatBytes(rx)} | UL: ${formatBytes(tx)}"
             }
         }
@@ -161,7 +162,6 @@ class MainActivity : AppCompatActivity() {
             updateModeDiagnostics(selectedMode)
         }
 
-        // Ciri 5: Pemilihan DNS
         binding.chipGroupDns.setOnCheckedStateChangeListener { _, checkedIds ->
             if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
 
@@ -189,7 +189,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Ciri 2: Dialog Pemilihan Split Tunneling
     private fun showAppExclusionDialog() {
         val pm = packageManager
         val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
@@ -244,7 +243,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateModeDiagnostics(mode: Int) {
         when (mode) {
             TokenBucket.MODE_GAMING -> {
-                binding.tvShaperLimit.text = "Terkunci (3.8 Mbps)"
+                binding.tvShaperLimit.text = "Kunci (UL: 3.8M | DL: 12M)"
                 binding.tvShaperLimit.setTextColor(Color.parseColor("#FBBF24"))
             }
             TokenBucket.MODE_UNLIMITED -> {
@@ -292,7 +291,7 @@ class MainActivity : AppCompatActivity() {
 
         if (isRunning) {
             binding.tvStatusTitle.text = getString(R.string.status_running)
-            binding.tvStatusDesc.text = "Perlindungan aktif. DNS pantas dan kawalan kependaman sedang berjalan."
+            binding.tvStatusDesc.text = "Perlindungan aktif. Kawalan kependaman dua hala sedang berjalan."
             binding.imgStatusIcon.setImageResource(android.R.drawable.ic_lock_idle_charging)
             binding.imgStatusIcon.setColorFilter(Color.parseColor("#34D399"))
             binding.btnToggleService.text = getString(R.string.btn_stop)
