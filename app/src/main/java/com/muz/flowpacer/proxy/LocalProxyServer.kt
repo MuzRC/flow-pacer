@@ -7,6 +7,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 class LocalProxyServer(
@@ -19,9 +20,15 @@ class LocalProxyServer(
     @Volatile
     private var isRunning = false
 
+    // Ciri 4: Pengira bait masa-nyata
+    val totalBytesUploaded = AtomicLong(0L)
+    val totalBytesDownloaded = AtomicLong(0L)
+
     fun start() {
         if (isRunning) return
         isRunning = true
+        totalBytesUploaded.set(0L)
+        totalBytesDownloaded.set(0L)
 
         thread(name = "FlowPacer-HttpProxy", isDaemon = true) {
             try {
@@ -65,7 +72,6 @@ class LocalProxyServer(
             val targetPort: Int
 
             if (method.equals("CONNECT", ignoreCase = true)) {
-                // Mod Terowong HTTPS
                 while (true) {
                     val header = readLineByteByByte(clientIn)
                     if (header.isNullOrEmpty()) break
@@ -83,7 +89,6 @@ class LocalProxyServer(
                 clientOut.write(response.toByteArray(Charsets.US_ASCII))
                 clientOut.flush()
             } else {
-                // Mod HTTP Biasa
                 val cleanUrl = if (target.startsWith("http://", ignoreCase = true)) target.substring(7) else target
                 val slashIdx = cleanUrl.indexOf('/')
                 val hostPart = if (slashIdx != -1) cleanUrl.substring(0, slashIdx) else cleanUrl
@@ -97,14 +102,15 @@ class LocalProxyServer(
                 upstreamSocket.connect(InetSocketAddress(targetHost, targetPort), 10000)
 
                 val upstreamOut = upstreamSocket.getOutputStream()
-                upstreamOut.write("$requestLine\r\n".toByteArray(Charsets.US_ASCII))
+                val reqBytes = "$requestLine\r\n".toByteArray(Charsets.US_ASCII)
+                upstreamOut.write(reqBytes)
                 upstreamOut.flush()
+                totalBytesUploaded.addAndGet(reqBytes.size.toLong())
             }
 
             val upstreamIn = upstreamSocket.getInputStream()
             val upstreamOut = upstreamSocket.getOutputStream()
 
-            // Aliran Dua Hala Bebas Deadlock
             val uploadThread = thread(name = "Upload-Limiter", isDaemon = true) {
                 try {
                     pipeWithRateLimit(clientIn, upstreamOut)
@@ -151,6 +157,7 @@ class LocalProxyServer(
 
                 output.write(buffer, 0, bytesRead)
                 output.flush()
+                totalBytesUploaded.addAndGet(bytesRead.toLong())
             }
         } catch (_: Exception) {}
     }
@@ -163,6 +170,7 @@ class LocalProxyServer(
                 if (bytesRead == -1) break
                 output.write(buffer, 0, bytesRead)
                 output.flush()
+                totalBytesDownloaded.addAndGet(bytesRead.toLong())
             }
         } catch (_: Exception) {}
     }
