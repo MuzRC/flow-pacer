@@ -39,13 +39,17 @@ class FlowPacerService : VpnService() {
         initialRateMbps = 3.8
     )
 
-    private var currentAdaptiveRateMbps = 5.0
+    private var currentAdaptiveRateMbps = 3.8
 
     companion object {
         const val ACTION_START = "com.muz.flowpacer.START"
         const val ACTION_STOP = "com.muz.flowpacer.STOP"
         const val ACTION_SET_MODE = "com.muz.flowpacer.SET_MODE"
+        const val ACTION_METRICS_UPDATE = "com.muz.flowpacer.METRICS_UPDATE"
+
         const val EXTRA_MODE = "extra_mode"
+        const val EXTRA_PING = "extra_ping"
+        const val EXTRA_RATE_MBPS = "extra_rate_mbps"
 
         const val NOTIFICATION_CHANNEL_ID = "flowpacer_service_channel"
         const val NOTIFICATION_ID = 1001
@@ -79,6 +83,14 @@ class FlowPacerService : VpnService() {
         activeMode = mode
         uploadTokenBucket.setMode(mode)
         updateNotification()
+        
+        // Hantar maklum balas serta-merta bila mod ditukar
+        val reportedRate = when (mode) {
+            TokenBucket.MODE_GAMING -> 3.8
+            TokenBucket.MODE_UNLIMITED -> -1.0
+            else -> currentAdaptiveRateMbps
+        }
+        broadcastMetrics(-1L, reportedRate)
     }
 
     private fun startOptimization() {
@@ -104,14 +116,12 @@ class FlowPacerService : VpnService() {
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
 
-            // PENTING: Kecualikan aplikasi sendiri supaya DNS dan soket tidak tersangkut
             try {
                 builder.addDisallowedApplication(packageName)
             } catch (e: PackageManager.NameNotFoundException) {
                 e.printStackTrace()
             }
 
-            // Halakan trafik HTTP/HTTPS ke pelayan proksi tempatan
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setHttpProxy(
                     ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT)
@@ -121,7 +131,7 @@ class FlowPacerService : VpnService() {
             vpnInterface = builder.establish()
             isServiceRunning = true
 
-            // 3. Jalankan Pemantauan Kependaman Adaptif
+            // 3. Jalankan Pemantau Kependaman Adaptif Berkelajuan Masa-Nyata
             startAdaptiveFeedbackLoop()
 
         } catch (e: Exception) {
@@ -136,26 +146,44 @@ class FlowPacerService : VpnService() {
             while (isActive) {
                 delay(4000)
 
-                if (activeMode != TokenBucket.MODE_AUTO) continue
-
-                // Guna Port 443 dengan perlindungan soket VPN
                 val ping = probeLatency("1.1.1.1", 443, 2500)
-                if (ping < 0) continue
 
-                if (ping > 160) {
-                    currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.75).coerceAtLeast(1.5)
-                    uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
-                } else if (ping < 85) {
-                    currentAdaptiveRateMbps = (currentAdaptiveRateMbps + 0.8).coerceAtMost(40.0)
-                    uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                if (activeMode == TokenBucket.MODE_AUTO) {
+                    if (ping in 0..160 && ping > 120) {
+                        // Kependaman mula merayap naik: kurangkan sedikit kelajuan
+                        currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.85).coerceAtLeast(1.5)
+                        uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                    } else if (ping > 160) {
+                        // Kependaman sesak: tekan brek 25%
+                        currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.75).coerceAtLeast(1.2)
+                        uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                    } else if (ping in 0..85) {
+                        // Talian tenang: uji naikkan had laju secara beransur-ansur
+                        currentAdaptiveRateMbps = (currentAdaptiveRateMbps + 0.6).coerceAtMost(35.0)
+                        uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                    }
+                    broadcastMetrics(ping, currentAdaptiveRateMbps)
+                } else if (activeMode == TokenBucket.MODE_GAMING) {
+                    broadcastMetrics(ping, 3.8)
+                } else {
+                    broadcastMetrics(ping, -1.0)
                 }
             }
         }
     }
 
+    private fun broadcastMetrics(ping: Long, rateMbps: Double) {
+        val intent = Intent(ACTION_METRICS_UPDATE).apply {
+            putExtra(EXTRA_PING, ping)
+            putExtra(EXTRA_RATE_MBPS, rateMbps)
+            setPackage(packageName)
+        }
+        sendBroadcast(intent)
+    }
+
     private fun probeLatency(host: String, port: Int, timeoutMs: Int): Long {
         val socket = Socket()
-        protect(socket) // Elak soket ujian dipintas oleh VPN sendiri
+        protect(socket)
         val start = System.currentTimeMillis()
         return try {
             socket.connect(InetSocketAddress(host, port), timeoutMs)
