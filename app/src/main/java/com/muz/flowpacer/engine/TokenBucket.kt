@@ -1,17 +1,17 @@
 package com.muz.flowpacer.engine
 
 /**
- * Enjin Token Bucket Adaptif dengan Had Lonjakan Mikro (Micro-burst Limiter).
- * Mengelakkan lambakan paket serentak yang membanjiri penampan repeater Wi-Fi.
+ * Enjin Token Bucket Adaptif dengan Sistem Hutang (Deficit Debt Pacing).
+ * Menghalang sambungan selari (multi-connection) daripada membocorkan had laju.
  */
 class TokenBucket(
     private var maxTokens: Long = 16 * 1024,
     initialRateMbps: Double = 3.8
 ) {
     companion object {
-        const val MODE_AUTO = 0      // Auto-Pintar (Adaptif ikut kependaman semasa)
-        const val MODE_GAMING = 1    // Kunci Permua (Strict 3.8 Mbps anti-jitter)
-        const val MODE_UNLIMITED = 2 // Tiada Had (Bypass 100%)
+        const val MODE_AUTO = 0
+        const val MODE_GAMING = 1
+        const val MODE_UNLIMITED = 2
     }
 
     @Volatile
@@ -33,12 +33,9 @@ class TokenBucket(
 
     @Synchronized
     fun adjustRate(mbps: Double) {
-        val clampedMbps = mbps.coerceIn(0.8, 40.0)
+        val clampedMbps = mbps.coerceIn(0.8, 50.0)
         refillRatePerSec = (clampedMbps * 1024 * 1024 / 8).toLong()
-
-        // Hadkan saiz burst kepada ~40ms trafik sahaja (antara 4KB hingga 24KB)
-        // Ini memastikan data keluar secara titisan licin, bukan pancutan mengejut
-        maxTokens = ((clampedMbps * 1024 * 1024 / 8) * 0.04).toLong().coerceIn(4 * 1024, 24 * 1024)
+        maxTokens = ((clampedMbps * 1024 * 1024 / 8) * 0.04).toLong().coerceIn(4 * 1024, 32 * 1024)
         if (availableTokens > maxTokens) {
             availableTokens = maxTokens
         }
@@ -52,17 +49,18 @@ class TokenBucket(
 
         refill()
 
-        if (availableTokens >= bytes) {
-            availableTokens -= bytes
+        // Tolak terus bait yang diminta (baki boleh jatuh ke angka negatif / berhutang)
+        availableTokens -= bytes
+
+        // Jika baki masih ada, lepas terus tanpa sebarang delay
+        if (availableTokens >= 0) {
             return 0L
         }
 
-        val deficit = bytes - availableTokens
-        val waitTimeNanos = (deficit * 1_000_000_000L) / refillRatePerSec
-        val waitTimeMillis = (waitTimeNanos / 1_000_000L).coerceAtLeast(1L)
-
-        availableTokens = 0
-        return waitTimeMillis
+        // Jika masuk baki negatif, kira berapa lama masa untuk bayar balik hutang token tersebut
+        val debt = -availableTokens
+        val waitTimeNanos = (debt * 1_000_000_000L) / refillRatePerSec
+        return (waitTimeNanos / 1_000_000L).coerceIn(1L, 400L)
     }
 
     private fun refill() {
@@ -71,6 +69,7 @@ class TokenBucket(
         if (elapsedSec > 0) {
             val newTokens = (elapsedSec * refillRatePerSec).toLong()
             if (newTokens > 0) {
+                // Tambah token dari baki semasa (walaupun tengah negatif)
                 availableTokens = (availableTokens + newTokens).coerceAtMost(maxTokens)
                 lastRefillTimestamp = now
             }
