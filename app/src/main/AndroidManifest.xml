@@ -1,26 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Kebenaran Asas Rangkaian -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
-    <!-- Kebenaran Notifikasi (Android 13 / API 33 ke atas) -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!-- Kebenaran Servis Latar Belakang & Spesifikasi Android 14 (API 34) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Membolehkan pengimbasan senarai aplikasi yang dipasang untuk Pengecualian (Split Tunneling) -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
 
     <application
-    android:allowBackup="true"
-    android:icon="@android:drawable/sym_def_app_icon"
-    android:label="@string/app_name"
-    android:roundIcon="@android:drawable/sym_def_app_icon"
-    android:supportsRtl="true"
-    android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
+        android:allowBackup="true"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
 
-        <!-- Aktiviti Utama (Skrin Dashboard) -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -31,22 +32,30 @@
             </intent-filter>
         </activity>
 
-        <!-- Servis Terowong VpnService Tempatan -->
         <service
             android:name=".service.FlowPacerService"
-            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false"
             android:foregroundServiceType="specialUse"
-            android:exported="false">
+            android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
-            
-            <!-- Pengisytiharan kegunaan khas untuk Android 14+ -->
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Local VPN loopback for network latency stabilization and anti-bufferbloat traffic shaping" />
+                android:value="Network traffic pacing and latency optimization for bufferbloat prevention" />
+        </service>
+
+        <!-- Ciri 1: Jubin Tetapan Pantas Bar Notifikasi -->
+        <service
+            android:name=".service.FlowPacerTileService"
+            android:exported="true"
+            android:icon="@android:drawable/stat_sys_upload_done"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
         </service>
 
     </application>
-
 </manifest>
