@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -44,24 +45,23 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
-    // Penerima data langsung (Live Broadcast) dari FlowPacerService
     private val metricsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == FlowPacerService.ACTION_METRICS_UPDATE) {
                 val ping = intent.getLongExtra(FlowPacerService.EXTRA_PING, -1L)
                 val rateMbps = intent.getDoubleExtra(FlowPacerService.EXTRA_RATE_MBPS, -1.0)
+                val tx = intent.getLongExtra(FlowPacerService.EXTRA_TX_BYTES, 0L)
+                val rx = intent.getLongExtra(FlowPacerService.EXTRA_RX_BYTES, 0L)
 
-                // Kemas kini paparan ping secara live
                 if (ping >= 0) {
                     binding.tvPingValue.text = "$ping ms"
                     when {
-                        ping < 100 -> binding.tvPingValue.setTextColor(Color.parseColor("#34D399")) // Hijau
-                        ping < 200 -> binding.tvPingValue.setTextColor(Color.parseColor("#FBBF24")) // Kuning
-                        else -> binding.tvPingValue.setTextColor(Color.parseColor("#F87171")) // Merah
+                        ping < 100 -> binding.tvPingValue.setTextColor(Color.parseColor("#34D399"))
+                        ping < 200 -> binding.tvPingValue.setTextColor(Color.parseColor("#FBBF24"))
+                        else -> binding.tvPingValue.setTextColor(Color.parseColor("#F87171"))
                     }
                 }
 
-                // Kemas kini angka siling muat naik dinamik (Live Mbps)
                 when (FlowPacerService.activeMode) {
                     TokenBucket.MODE_GAMING -> {
                         binding.tvShaperLimit.text = "Terkunci (3.8 Mbps)"
@@ -80,6 +80,9 @@ class MainActivity : AppCompatActivity() {
                         binding.tvShaperLimit.setTextColor(Color.parseColor("#34D399"))
                     }
                 }
+
+                // Ciri 4: Papar statistik penggunaan sesi (DL/UL)
+                binding.tvSessionTraffic.text = "DL: ${formatBytes(rx)} | UL: ${formatBytes(tx)}"
             }
         }
     }
@@ -89,13 +92,12 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Pastikan paparan cip sentiasa bermula di kedudukan paling kiri
-        binding.scrollChips.post {
-            binding.scrollChips.scrollTo(0, 0)
-        }
+        binding.scrollChips.post { binding.scrollChips.scrollTo(0, 0) }
+        binding.scrollDns.post { binding.scrollDns.scrollTo(0, 0) }
 
         checkNotificationPermission()
         setupListeners()
+        syncSavedDnsSelection()
         updateUiState()
     }
 
@@ -142,6 +144,10 @@ class MainActivity : AppCompatActivity() {
             runLatencyTest()
         }
 
+        binding.btnExcludedApps.setOnClickListener {
+            showAppExclusionDialog()
+        }
+
         binding.chipGroupMode.setOnCheckedStateChangeListener { _, checkedIds ->
             if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
 
@@ -154,6 +160,66 @@ class MainActivity : AppCompatActivity() {
             dispatchModeChange(selectedMode)
             updateModeDiagnostics(selectedMode)
         }
+
+        // Ciri 5: Pemilihan DNS
+        binding.chipGroupDns.setOnCheckedStateChangeListener { _, checkedIds ->
+            if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
+
+            val dnsType = when (checkedIds.first()) {
+                R.id.chipDnsAdGuard -> FlowPacerService.DNS_ADGUARD
+                R.id.chipDnsGoogle -> FlowPacerService.DNS_GOOGLE
+                else -> FlowPacerService.DNS_CLOUDFLARE
+            }
+
+            val prefs = getSharedPreferences(FlowPacerService.PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().putInt(FlowPacerService.PREF_DNS_TYPE, dnsType).apply()
+
+            if (FlowPacerService.isServiceRunning) {
+                Toast.makeText(this, "Mulakan semula servis untuk mengaktifkan DNS baru", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun syncSavedDnsSelection() {
+        val prefs = getSharedPreferences(FlowPacerService.PREFS_NAME, Context.MODE_PRIVATE)
+        when (prefs.getInt(FlowPacerService.PREF_DNS_TYPE, FlowPacerService.DNS_CLOUDFLARE)) {
+            FlowPacerService.DNS_ADGUARD -> binding.chipDnsAdGuard.isChecked = true
+            FlowPacerService.DNS_GOOGLE -> binding.chipDnsGoogle.isChecked = true
+            else -> binding.chipDnsCloudflare.isChecked = true
+        }
+    }
+
+    // Ciri 2: Dialog Pemilihan Split Tunneling
+    private fun showAppExclusionDialog() {
+        val pm = packageManager
+        val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
+            .filter { it.activityInfo.packageName != packageName }
+            .sortedBy { it.loadLabel(pm).toString() }
+
+        val appNames = resolveInfos.map { it.loadLabel(pm).toString() }.toTypedArray()
+        val appPackages = resolveInfos.map { it.activityInfo.packageName }.toTypedArray()
+
+        val prefs = getSharedPreferences(FlowPacerService.PREFS_NAME, Context.MODE_PRIVATE)
+        val savedExcluded = prefs.getStringSet(FlowPacerService.PREF_EXCLUDED_APPS, emptySet())?.toMutableSet() ?: mutableSetOf()
+        val checkedItems = BooleanArray(appPackages.size) { idx ->
+            savedExcluded.contains(appPackages[idx])
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Pilih Aplikasi Dikecualikan")
+            .setMultiChoiceItems(appNames, checkedItems) { _, which, isChecked ->
+                val pkg = appPackages[which]
+                if (isChecked) savedExcluded.add(pkg) else savedExcluded.remove(pkg)
+            }
+            .setPositiveButton("Simpan") { _, _ ->
+                prefs.edit().putStringSet(FlowPacerService.PREF_EXCLUDED_APPS, savedExcluded).apply()
+                Toast.makeText(this, "Tetapan disimpan (${savedExcluded.size} aplikasi)", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Batal", null)
+            .show()
     }
 
     private fun dispatchModeChange(mode: Int) {
@@ -275,6 +341,15 @@ class MainActivity : AppCompatActivity() {
             duration
         } catch (_: Exception) {
             -1L
+        }
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        return when {
+            bytes >= 1024 * 1024 * 1024 -> String.format(Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+            bytes >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+            bytes >= 1024 -> String.format(Locale.US, "%.0f KB", bytes / 1024.0)
+            else -> "$bytes B"
         }
     }
 }
