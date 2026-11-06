@@ -40,7 +40,7 @@
             android:id="@+id/cardStatus"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="20dp"
             app:cardBackgroundColor="#1E293B"
             app:cardCornerRadius="16dp"
             app:cardElevation="0dp"
@@ -55,12 +55,12 @@
                 android:layout_height="wrap_content"
                 android:gravity="center"
                 android:orientation="vertical"
-                android:padding="24dp">
+                android:padding="20dp">
 
                 <ImageView
                     android:id="@+id/imgStatusIcon"
-                    android:layout_width="64dp"
-                    android:layout_height="64dp"
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
                     android:src="@android:drawable/ic_lock_idle_lock"
                     app:tint="#64748B" />
 
@@ -68,24 +68,85 @@
                     android:id="@+id/tvStatusTitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
+                    android:layout_marginTop="12dp"
                     android:text="@string/status_idle"
                     android:textColor="#F8FAFC"
-                    android:textSize="18sp"
+                    android:textSize="17sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:id="@+id/tvStatusDesc"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
+                    android:layout_marginTop="4dp"
                     android:text="Trafik bergerak pada laluan lalai tanpa kawalan antrean."
                     android:textAlignment="center"
                     android:textColor="#94A3B8"
-                    android:textSize="13sp" />
+                    android:textSize="12sp" />
 
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
+
+        <!-- Pilihan Profil Operasi (ChipGroup) -->
+        <TextView
+            android:id="@+id/tvModeLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="PILIHAN PROFIL OPERASI"
+            android:textColor="#64748B"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/cardStatus" />
+
+        <HorizontalScrollView
+            android:id="@+id/scrollChips"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:scrollbars="none"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/tvModeLabel">
+
+            <com.google.android.material.chip.ChipGroup
+                android:id="@+id/chipGroupMode"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                app:singleSelection="true"
+                app:selectionRequired="true">
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chipAuto"
+                    style="@style/Widget.MaterialComponents.Chip.Choice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:checked="true"
+                    android:text="⚡ Auto-Pintar"
+                    android:textColor="#E2E8F0"
+                    app:chipBackgroundColor="#334155" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chipGaming"
+                    style="@style/Widget.MaterialComponents.Chip.Choice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🎮 Kunci Permua"
+                    android:textColor="#E2E8F0"
+                    app:chipBackgroundColor="#334155" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chipUnlimited"
+                    style="@style/Widget.MaterialComponents.Chip.Choice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🚀 Tiada Had (Bypass)"
+                    android:textColor="#E2E8F0"
+                    app:chipBackgroundColor="#334155" />
+
+            </com.google.android.material.chip.ChipGroup>
+        </HorizontalScrollView>
 
         <!-- Kad Diagnostik Rangkaian -->
         <com.google.android.material.card.MaterialCardView
@@ -100,29 +161,28 @@
             app:strokeWidth="1dp"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/cardStatus">
+            app:layout_constraintTop_toBottomOf="@id/scrollChips">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="20dp">
+                android:padding="18dp">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Metrik Operasi"
+                    android:text="Metrik Operasi Semasa"
                     android:textColor="#E2E8F0"
-                    android:textSize="15sp"
+                    android:textSize="14sp"
                     android:textStyle="bold" />
 
                 <View
                     android:layout_width="match_parent"
                     android:layout_height="1dp"
-                    android:layout_marginVertical="12dp"
+                    android:layout_marginVertical="10dp"
                     android:background="#334155" />
 
-                <!-- Baris Ping -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -142,11 +202,10 @@
                         android:layout_height="wrap_content"
                         android:text="-- ms"
                         android:textColor="#38BDF8"
-                        android:textSize="14sp"
+                        android:textSize="13sp"
                         android:textStyle="bold" />
                 </LinearLayout>
 
-                <!-- Baris Had Muat Naik -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -157,7 +216,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Had Siling Pacing Muat Naik"
+                        android:text="Kawalan Siling Muat Naik"
                         android:textColor="#94A3B8"
                         android:textSize="13sp" />
 
@@ -165,9 +224,9 @@
                         android:id="@+id/tvShaperLimit"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="3.8 Mbps"
+                        android:text="Dinamik (Auto)"
                         android:textColor="#34D399"
-                        android:textSize="14sp"
+                        android:textSize="13sp"
                         android:textStyle="bold" />
                 </LinearLayout>
 
@@ -179,7 +238,7 @@
             android:id="@+id/btnTestPing"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="0dp"
-            android:layout_height="54dp"
+            android:layout_height="52dp"
             android:layout_marginTop="20dp"
             android:text="@string/btn_test_ping"
             android:textColor="#E2E8F0"
@@ -189,12 +248,12 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/cardDiagnostics" />
 
-        <!-- Butang Togol Perlindungan Utama -->
+        <!-- Butang Togol Utama -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnToggleService"
             android:layout_width="0dp"
-            android:layout_height="56dp"
-            android:layout_marginTop="12dp"
+            android:layout_height="54dp"
+            android:layout_marginTop="10dp"
             android:backgroundTint="#0284C7"
             android:text="@string/btn_start"
             android:textColor="#FFFFFF"
