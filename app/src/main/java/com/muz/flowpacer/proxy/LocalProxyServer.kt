@@ -12,7 +12,8 @@ import kotlin.concurrent.thread
 
 class LocalProxyServer(
     private val port: Int = 10808,
-    private val tokenBucket: TokenBucket,
+    private val uploadTokenBucket: TokenBucket,
+    private val downloadTokenBucket: TokenBucket,
     private val onProtectSocket: (Socket) -> Unit
 ) {
 
@@ -20,7 +21,6 @@ class LocalProxyServer(
     @Volatile
     private var isRunning = false
 
-    // Ciri 4: Pengira bait masa-nyata
     val totalBytesUploaded = AtomicLong(0L)
     val totalBytesDownloaded = AtomicLong(0L)
 
@@ -72,6 +72,7 @@ class LocalProxyServer(
             val targetPort: Int
 
             if (method.equals("CONNECT", ignoreCase = true)) {
+                // Mod Terowong HTTPS
                 while (true) {
                     val header = readLineByteByByte(clientIn)
                     if (header.isNullOrEmpty()) break
@@ -89,6 +90,7 @@ class LocalProxyServer(
                 clientOut.write(response.toByteArray(Charsets.US_ASCII))
                 clientOut.flush()
             } else {
+                // Mod HTTP Biasa
                 val cleanUrl = if (target.startsWith("http://", ignoreCase = true)) target.substring(7) else target
                 val slashIdx = cleanUrl.indexOf('/')
                 val hostPart = if (slashIdx != -1) cleanUrl.substring(0, slashIdx) else cleanUrl
@@ -111,16 +113,18 @@ class LocalProxyServer(
             val upstreamIn = upstreamSocket.getInputStream()
             val upstreamOut = upstreamSocket.getOutputStream()
 
+            // Aliran Muat Naik (Upload Rate Limited)
             val uploadThread = thread(name = "Upload-Limiter", isDaemon = true) {
                 try {
-                    pipeWithRateLimit(clientIn, upstreamOut)
+                    pipeWithUploadRateLimit(clientIn, upstreamOut)
                 } finally {
                     try { upstreamSocket?.close() } catch (_: Exception) {}
                 }
             }
 
+            // Aliran Muat Turun (Download Rate Limited - Menghalang Download Bufferbloat)
             try {
-                pipeDirect(upstreamIn, clientOut)
+                pipeWithDownloadRateLimit(upstreamIn, clientOut)
             } finally {
                 try { clientSocket.close() } catch (_: Exception) {}
             }
@@ -145,14 +149,14 @@ class LocalProxyServer(
         return sb.toString()
     }
 
-    private fun pipeWithRateLimit(input: InputStream, output: OutputStream) {
+    private fun pipeWithUploadRateLimit(input: InputStream, output: OutputStream) {
         val buffer = ByteArray(8192)
         try {
             while (isRunning) {
                 val bytesRead = input.read(buffer)
                 if (bytesRead == -1) break
 
-                val delayMs = tokenBucket.acquire(bytesRead)
+                val delayMs = uploadTokenBucket.acquire(bytesRead)
                 if (delayMs > 0) Thread.sleep(delayMs)
 
                 output.write(buffer, 0, bytesRead)
@@ -162,12 +166,17 @@ class LocalProxyServer(
         } catch (_: Exception) {}
     }
 
-    private fun pipeDirect(input: InputStream, output: OutputStream) {
-        val buffer = ByteArray(16384)
+    private fun pipeWithDownloadRateLimit(input: InputStream, output: OutputStream) {
+        // Guna saiz penampan 8KB supaya paket keluar secara titisan licin, bukan lambakan mengejut
+        val buffer = ByteArray(8192)
         try {
             while (isRunning) {
                 val bytesRead = input.read(buffer)
                 if (bytesRead == -1) break
+
+                val delayMs = downloadTokenBucket.acquire(bytesRead)
+                if (delayMs > 0) Thread.sleep(delayMs)
+
                 output.write(buffer, 0, bytesRead)
                 output.flush()
                 totalBytesDownloaded.addAndGet(bytesRead.toLong())
