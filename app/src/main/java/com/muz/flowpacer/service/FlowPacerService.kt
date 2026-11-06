@@ -50,6 +50,16 @@ class FlowPacerService : VpnService() {
         const val EXTRA_MODE = "extra_mode"
         const val EXTRA_PING = "extra_ping"
         const val EXTRA_RATE_MBPS = "extra_rate_mbps"
+        const val EXTRA_TX_BYTES = "extra_tx_bytes"
+        const val EXTRA_RX_BYTES = "extra_rx_bytes"
+
+        const val PREFS_NAME = "flowpacer_prefs"
+        const val PREF_EXCLUDED_APPS = "excluded_apps"
+        const val PREF_DNS_TYPE = "dns_type"
+
+        const val DNS_CLOUDFLARE = 0
+        const val DNS_ADGUARD = 1
+        const val DNS_GOOGLE = 2
 
         const val NOTIFICATION_CHANNEL_ID = "flowpacer_service_channel"
         const val NOTIFICATION_ID = 1001
@@ -84,7 +94,6 @@ class FlowPacerService : VpnService() {
         uploadTokenBucket.setMode(mode)
         updateNotification()
         
-        // Hantar maklum balas serta-merta bila mod ditukar
         val reportedRate = when (mode) {
             TokenBucket.MODE_GAMING -> 3.8
             TokenBucket.MODE_UNLIMITED -> -1.0
@@ -99,27 +108,48 @@ class FlowPacerService : VpnService() {
         startForegroundNotification()
 
         try {
-            // 1. Lancarkan Pelayan Proksi Tempatan
             proxyServer = LocalProxyServer(
                 port = PROXY_PORT,
                 tokenBucket = uploadTokenBucket,
-                onProtectSocket = { socket ->
-                    protect(socket)
-                }
+                onProtectSocket = { socket -> protect(socket) }
             ).apply {
                 start()
             }
 
-            // 2. Bina Terowong VPN Loopback
             val builder = Builder()
                 .setSession(getString(R.string.app_name))
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
 
+            // Ciri 5: Pasang Pelayan DNS Terpilih
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val dnsChoice = prefs.getInt(PREF_DNS_TYPE, DNS_CLOUDFLARE)
+            when (dnsChoice) {
+                DNS_ADGUARD -> {
+                    builder.addDnsServer("94.140.14.14")
+                    builder.addDnsServer("94.140.15.15")
+                }
+                DNS_GOOGLE -> {
+                    builder.addDnsServer("8.8.8.8")
+                    builder.addDnsServer("8.8.4.4")
+                }
+                else -> {
+                    builder.addDnsServer("1.1.1.1")
+                    builder.addDnsServer("1.0.0.1")
+                }
+            }
+
+            // Kecualikan pakej sendiri
             try {
                 builder.addDisallowedApplication(packageName)
-            } catch (e: PackageManager.NameNotFoundException) {
-                e.printStackTrace()
+            } catch (_: PackageManager.NameNotFoundException) {}
+
+            // Ciri 2: Kecualikan aplikasi pilihan pengguna (Split Tunneling)
+            val excludedApps = prefs.getStringSet(PREF_EXCLUDED_APPS, emptySet()) ?: emptySet()
+            for (pkg in excludedApps) {
+                try {
+                    builder.addDisallowedApplication(pkg)
+                } catch (_: Exception) {}
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -131,7 +161,6 @@ class FlowPacerService : VpnService() {
             vpnInterface = builder.establish()
             isServiceRunning = true
 
-            // 3. Jalankan Pemantau Kependaman Adaptif Berkelajuan Masa-Nyata
             startAdaptiveFeedbackLoop()
 
         } catch (e: Exception) {
@@ -150,15 +179,12 @@ class FlowPacerService : VpnService() {
 
                 if (activeMode == TokenBucket.MODE_AUTO) {
                     if (ping in 0..160 && ping > 120) {
-                        // Kependaman mula merayap naik: kurangkan sedikit kelajuan
                         currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.85).coerceAtLeast(1.5)
                         uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
                     } else if (ping > 160) {
-                        // Kependaman sesak: tekan brek 25%
                         currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.75).coerceAtLeast(1.2)
                         uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
                     } else if (ping in 0..85) {
-                        // Talian tenang: uji naikkan had laju secara beransur-ansur
                         currentAdaptiveRateMbps = (currentAdaptiveRateMbps + 0.6).coerceAtMost(35.0)
                         uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
                     }
@@ -173,9 +199,14 @@ class FlowPacerService : VpnService() {
     }
 
     private fun broadcastMetrics(ping: Long, rateMbps: Double) {
+        val tx = proxyServer?.totalBytesUploaded?.get() ?: 0L
+        val rx = proxyServer?.totalBytesDownloaded?.get() ?: 0L
+
         val intent = Intent(ACTION_METRICS_UPDATE).apply {
             putExtra(EXTRA_PING, ping)
             putExtra(EXTRA_RATE_MBPS, rateMbps)
+            putExtra(EXTRA_TX_BYTES, tx)
+            putExtra(EXTRA_RX_BYTES, rx)
             setPackage(packageName)
         }
         sendBroadcast(intent)
@@ -253,7 +284,7 @@ class FlowPacerService : VpnService() {
 
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.notif_title_active))
-            .setContentText("Profil Semasa: $modeLabel")
+            .setContentText("Profil: $modeLabel")
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
