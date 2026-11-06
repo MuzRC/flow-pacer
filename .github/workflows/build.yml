@@ -31,12 +31,12 @@ jobs:
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/release.keystore
 
-      - name: Pasang Gradle Wrapper
-        run: gradle wrapper
+      - name: Pasang Gradle Wrapper 8.6
+        run: gradle wrapper --gradle-version 8.6
 
       - name: Beri Kebenaran Pelaksanaan Gradlew
         run: chmod +x gradlew
-
+        
       - name: Kompilasi Signed Release APK
         env:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
