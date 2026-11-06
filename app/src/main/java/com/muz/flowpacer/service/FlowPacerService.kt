@@ -35,11 +35,12 @@ class FlowPacerService : VpnService() {
     private var adaptiveMonitorJob: Job? = null
 
     private val uploadTokenBucket = TokenBucket(
-        maxTokens = 32 * 1024,
+        maxTokens = 16 * 1024,
         initialRateMbps = 3.8
     )
 
     private var currentAdaptiveRateMbps = 3.8
+    private var baselinePing = 0L
 
     companion object {
         const val ACTION_START = "com.muz.flowpacer.START"
@@ -93,7 +94,7 @@ class FlowPacerService : VpnService() {
         activeMode = mode
         uploadTokenBucket.setMode(mode)
         updateNotification()
-        
+
         val reportedRate = when (mode) {
             TokenBucket.MODE_GAMING -> 3.8
             TokenBucket.MODE_UNLIMITED -> -1.0
@@ -121,7 +122,6 @@ class FlowPacerService : VpnService() {
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
 
-            // Ciri 5: Pasang Pelayan DNS Terpilih
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val dnsChoice = prefs.getInt(PREF_DNS_TYPE, DNS_CLOUDFLARE)
             when (dnsChoice) {
@@ -139,12 +139,10 @@ class FlowPacerService : VpnService() {
                 }
             }
 
-            // Kecualikan pakej sendiri
             try {
                 builder.addDisallowedApplication(packageName)
             } catch (_: PackageManager.NameNotFoundException) {}
 
-            // Ciri 2: Kecualikan aplikasi pilihan pengguna (Split Tunneling)
             val excludedApps = prefs.getStringSet(PREF_EXCLUDED_APPS, emptySet()) ?: emptySet()
             for (pkg in excludedApps) {
                 try {
@@ -173,27 +171,59 @@ class FlowPacerService : VpnService() {
         adaptiveMonitorJob?.cancel()
         adaptiveMonitorJob = serviceScope.launch {
             while (isActive) {
-                delay(4000)
+                // Timeout 2000ms memastikan semakan tidak tergantung bila antrean mula kembung
+                val ping = probeLatency("1.1.1.1", 443, 2000)
 
-                val ping = probeLatency("1.1.1.1", 443, 2500)
-
-                if (activeMode == TokenBucket.MODE_AUTO) {
-                    if (ping in 0..160 && ping > 120) {
-                        currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.85).coerceAtLeast(1.5)
-                        uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
-                    } else if (ping > 160) {
-                        currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.75).coerceAtLeast(1.2)
-                        uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
-                    } else if (ping in 0..85) {
-                        currentAdaptiveRateMbps = (currentAdaptiveRateMbps + 0.6).coerceAtMost(35.0)
-                        uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                if (ping > 0) {
+                    // Kalibrasi paras lantai: ambil ping terendah sebagai penanda aras
+                    if (baselinePing == 0L || ping < baselinePing) {
+                        baselinePing = ping
                     }
-                    broadcastMetrics(ping, currentAdaptiveRateMbps)
-                } else if (activeMode == TokenBucket.MODE_GAMING) {
-                    broadcastMetrics(ping, 3.8)
-                } else {
-                    broadcastMetrics(ping, -1.0)
+
+                    if (activeMode == TokenBucket.MODE_AUTO) {
+                        val bloatDelta = ping - baselinePing
+
+                        when {
+                            // 1. ZON CEMAS (Ping > 300ms atau lonjakan mendadak > 180ms):
+                            // Terus pancung ke siling lantai 1.0 Mbps serta-merta tanpa bertolak ansur
+                            ping > 300 || bloatDelta > 180 -> {
+                                currentAdaptiveRateMbps = 1.0
+                                uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                            }
+
+                            // 2. SESAK SEDERHANA (Lonjakan > 60ms dari lantai):
+                            // Cantas 40% kelajuan muat naik
+                            bloatDelta > 60 -> {
+                                currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.60).coerceAtLeast(1.2)
+                                uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                            }
+
+                            // 3. MULA MERAYAP (Lonjakan > 20ms dari lantai):
+                            // Tahan sedikit aliran (-15%)
+                            bloatDelta > 20 -> {
+                                currentAdaptiveRateMbps = (currentAdaptiveRateMbps * 0.85).coerceAtLeast(1.5)
+                                uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                            }
+
+                            // 4. TALIAN LAPANG & STABIL (Rapat dengan lantai <= 10ms):
+                            // Uji naikkan had siling secara beransur-ansur (+0.4 Mbps)
+                            bloatDelta <= 10 -> {
+                                currentAdaptiveRateMbps = (currentAdaptiveRateMbps + 0.4).coerceAtMost(30.0)
+                                uploadTokenBucket.adjustRate(currentAdaptiveRateMbps)
+                            }
+                        }
+                        broadcastMetrics(ping, currentAdaptiveRateMbps)
+                    } else if (activeMode == TokenBucket.MODE_GAMING) {
+                        broadcastMetrics(ping, 3.8)
+                    } else {
+                        broadcastMetrics(ping, -1.0)
+                    }
                 }
+
+                // Jika talian dikesan mula sesak, periksa semula dengan pantas (1.5s)
+                // Jika talian lapang dan tenang, semak secara santai (3.0s)
+                val nextDelay = if (ping > 150 || ping < 0) 1500L else 3000L
+                delay(nextDelay)
             }
         }
     }
