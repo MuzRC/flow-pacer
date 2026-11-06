@@ -21,6 +21,8 @@ import com.muz.flowpacer.databinding.ActivityMainBinding
 import com.muz.flowpacer.engine.TokenBucket
 import com.muz.flowpacer.service.FlowPacerService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
@@ -57,13 +59,12 @@ class MainActivity : AppCompatActivity() {
                 if (ping >= 0) {
                     binding.tvPingValue.text = "$ping ms"
                     when {
-                        ping < 100 -> binding.tvPingValue.setTextColor(Color.parseColor("#34D399"))
-                        ping < 200 -> binding.tvPingValue.setTextColor(Color.parseColor("#FBBF24"))
-                        else -> binding.tvPingValue.setTextColor(Color.parseColor("#F87171"))
+                        ping < 100 -> binding.tvPingValue.setTextColor(Color.parseColor("#34D399")) // Hijau
+                        ping < 200 -> binding.tvPingValue.setTextColor(Color.parseColor("#FBBF24")) // Kuning
+                        else -> binding.tvPingValue.setTextColor(Color.parseColor("#F87171")) // Merah
                     }
                 }
 
-                // Paparkan kedua-dua siling (Muat Naik & Muat Turun)
                 when (FlowPacerService.activeMode) {
                     TokenBucket.MODE_GAMING -> {
                         binding.tvShaperLimit.text = "Kunci (UL: 3.8M | DL: 12M)"
@@ -311,7 +312,8 @@ class MainActivity : AppCompatActivity() {
         binding.btnTestPing.isEnabled = false
 
         lifecycleScope.launch(Dispatchers.IO) {
-            val pingMs = measureLatency("1.1.1.1", 443, 2500)
+            // Tembak Cloudflare dan Google serentak, ambil keputusan terpantas
+            val pingMs = measureBestLatency(2500)
 
             withContext(Dispatchers.Main) {
                 binding.btnTestPing.isEnabled = true
@@ -330,24 +332,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun measureLatency(host: String, port: Int, timeoutMs: Int): Long {
-        val socket = Socket()
-        val startTime = System.currentTimeMillis()
-        return try {
-            socket.connect(InetSocketAddress(host, port), timeoutMs)
-            val duration = System.currentTimeMillis() - startTime
-            socket.close()
-            duration
-        } catch (_: Exception) {
-            -1L
+    private suspend fun measureBestLatency(timeoutMs: Int): Long = withContext(Dispatchers.IO) {
+        val targets = listOf(
+            "1.1.1.1" to 443,
+            "8.8.8.8" to 443
+        )
+        val deferreds = targets.map { (host, port) ->
+            async {
+                val socket = Socket()
+                val start = System.currentTimeMillis()
+                try {
+                    socket.connect(InetSocketAddress(host, port), timeoutMs)
+                    val duration = System.currentTimeMillis() - start
+                    socket.close()
+                    duration
+                } catch (_: Exception) {
+                    -1L
+                }
+            }
         }
+        val results = deferreds.awaitAll().filter { it >= 0 }
+        results.minOrNull() ?: -1L
     }
 
     private fun formatBytes(bytes: Long): String {
         return when {
             bytes >= 1024 * 1024 * 1024 -> String.format(Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
             bytes >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
-            bytes >= 1024 -> String.format(Locale.US, "%.0f KB", bytes / 1024.0)
+            bytes >= 1024 -> String.format(Locale.US, "%.0f KB", bytes / (1024.0 * 1024.0))
             else -> "$bytes B"
         }
     }
