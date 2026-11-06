@@ -20,10 +20,13 @@ import com.muz.flowpacer.proxy.LocalProxyServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.net.Socket
 
@@ -183,7 +186,8 @@ class FlowPacerService : VpnService() {
         adaptiveMonitorJob?.cancel()
         adaptiveMonitorJob = serviceScope.launch {
             while (isActive) {
-                val ping = probeLatency("1.1.1.1", 443, 2000)
+                // Tembak Cloudflare dan Google serentak, ambil kependaman terendah
+                val ping = probeBestLatency(2000)
 
                 if (ping > 0) {
                     if (baselinePing == 0L || ping < baselinePing) {
@@ -240,6 +244,34 @@ class FlowPacerService : VpnService() {
         }
     }
 
+    private suspend fun probeBestLatency(timeoutMs: Int): Long = withContext(Dispatchers.IO) {
+        val targets = listOf(
+            "1.1.1.1" to 443,
+            "8.8.8.8" to 443
+        )
+        val deferreds = targets.map { (host, port) ->
+            async {
+                probeSingleSocket(host, port, timeoutMs)
+            }
+        }
+        val results = deferreds.awaitAll().filter { it >= 0 }
+        results.minOrNull() ?: -1L
+    }
+
+    private fun probeSingleSocket(host: String, port: Int, timeoutMs: Int): Long {
+        val socket = Socket()
+        protect(socket)
+        val start = System.currentTimeMillis()
+        return try {
+            socket.connect(InetSocketAddress(host, port), timeoutMs)
+            val duration = System.currentTimeMillis() - start
+            socket.close()
+            duration
+        } catch (_: Exception) {
+            -1L
+        }
+    }
+
     private fun broadcastMetrics(ping: Long, ulMbps: Double, dlMbps: Double) {
         val tx = proxyServer?.totalBytesUploaded?.get() ?: 0L
         val rx = proxyServer?.totalBytesDownloaded?.get() ?: 0L
@@ -253,20 +285,6 @@ class FlowPacerService : VpnService() {
             setPackage(packageName)
         }
         sendBroadcast(intent)
-    }
-
-    private fun probeLatency(host: String, port: Int, timeoutMs: Int): Long {
-        val socket = Socket()
-        protect(socket)
-        val start = System.currentTimeMillis()
-        return try {
-            socket.connect(InetSocketAddress(host, port), timeoutMs)
-            val duration = System.currentTimeMillis() - start
-            socket.close()
-            duration
-        } catch (_: Exception) {
-            -1L
-        }
     }
 
     private fun stopOptimization() {
