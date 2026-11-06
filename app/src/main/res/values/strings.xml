@@ -1,0 +1,31 @@
+<resources>
+    <!-- Nama Aplikasi -->
+    <string name="app_name">FlowPacer</string>
+
+    <!-- Status & Tajuk Antaramuka -->
+    <string name="status_title">Status Sambungan</string>
+    <string name="status_idle">Tidak Aktif (Talian Biasa)</string>
+    <string name="status_running">Perlindungan Aktif (Anti-Bufferbloat)</string>
+    <string name="status_connecting">Sedang Menyambung...</string>
+
+    <!-- Metrik & Bacaan -->
+    <string name="metric_ping">Kependaman Semasa: %1$d ms</string>
+    <string name="metric_ping_testing">Kependaman Semasa: Menguji...</string>
+    <string name="metric_ping_failed">Kependaman Semasa: Terputus / Gagal</string>
+    <string name="metric_shaper_limit">Had Siling Muat Naik: %1$.1f Mbps</string>
+    <string name="metric_packets_prowled">Paket Keutamaan Diluluskan: %1$d</string>
+
+    <!-- Tindakan Butang -->
+    <string name="btn_start">Aktifkan Penstabil Rangkaian</string>
+    <string name="btn_stop">Nyahaktifkan</string>
+    <string name="btn_test_ping">Uji Kependaman Sekarang</string>
+
+    <!-- Notifikasi Sistem (Foreground Service) -->
+    <string name="notif_channel_name">Servis Pengoptimuman Rangkaian</string>
+    <string name="notif_channel_desc">Pemberitahuan operasi kawalan trafik FlowPacer</string>
+    <string name="notif_title_active">FlowPacer Sedang Beroperasi</string>
+    <string name="notif_desc_active">Mengawal aliran data dan menstabilkan kependaman.</string>
+
+    <!-- Mesej Ralat & Dialog -->
+    <string name="err_vpn_permission_denied">Kebenaran VPN diperlukan untuk mengawal antrean trafik.</string>
+</resources>
