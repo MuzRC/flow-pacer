@@ -3,29 +3,66 @@
     <string name="app_name">FlowPacer</string>
 
     <!-- Status & Tajuk Antaramuka -->
+    <string name="app_subtitle">Penstabil Kependaman &amp; Anti-Bufferbloat</string>
     <string name="status_title">Status Sambungan</string>
     <string name="status_idle">Tidak Aktif (Talian Biasa)</string>
-    <string name="status_running">Perlindungan Aktif (Anti-Bufferbloat)</string>
+    <string name="status_running">Perlindungan Aktif (Anti-Bufferbloat L3)</string>
     <string name="status_connecting">Sedang Menyambung...</string>
+    <string name="status_desc_idle">Trafik bergerak pada laluan lalai tanpa kawalan antrean.</string>
+    <string name="status_desc_running">Perlindungan aktif. Kawalan kependaman Layer 3 sedang mengawal antrean paket.</string>
 
-    <!-- Metrik & Bacaan -->
-    <string name="metric_ping">Kependaman Semasa: %1$d ms</string>
-    <string name="metric_ping_testing">Kependaman Semasa: Menguji...</string>
-    <string name="metric_ping_failed">Kependaman Semasa: Terputus / Gagal</string>
-    <string name="metric_shaper_limit">Had Siling Muat Naik: %1$.1f Mbps</string>
-    <string name="metric_packets_prowled">Paket Keutamaan Diluluskan: %1$d</string>
+    <!-- Profil Operasi -->
+    <string name="label_operation_profile">PILIHAN PROFIL OPERASI</string>
+    <string name="profile_auto">⚡ Auto-Pintar</string>
+    <string name="profile_gaming">🎮 Kunci Permua</string>
+    <string name="profile_unlimited">🚀 Tiada Had</string>
+
+    <!-- Pemilihan Pelayan DNS -->
+    <string name="label_dns_server">PELAYAN DNS TERPILIH</string>
+    <string name="dns_cloudflare">🛡️ Cloudflare (1.1.1.1)</string>
+    <string name="dns_adguard">🚫 AdGuard (Sekat Iklan)</string>
+    <string name="dns_google">🌐 Google (8.8.8.8)</string>
+    <string name="toast_dns_restart_needed">Mulakan semula servis untuk mengaktifkan DNS baru</string>
+
+    <!-- Metrik & Bacaan Diagnostik -->
+    <string name="label_diagnostics_title">Metrik Operasi &amp; Data Sesi</string>
+    <string name="label_current_latency">Kependaman Semasa</string>
+    <string name="label_upload_ceiling">Siling Muat Naik Semasa</string>
+    <string name="label_session_traffic">Trafik Terkawal Sesi</string>
+    <string name="metric_ping">%1$d ms</string>
+    <string name="metric_ping_testing">Menguji...</string>
+    <string name="metric_ping_failed">Gagal</string>
+    <string name="metric_shaper_dynamic">Dinamik Adaptif</string>
+    <string name="metric_shaper_gaming">Kunci (UL: 3.8M | DL: 12M)</string>
+    <string name="metric_shaper_unlimited">Tiada Had (Bypass)</string>
+    <string name="metric_shaper_limit">UL: %1$.1fM | DL: %2$.0fM</string>
+    <string name="metric_traffic_format">DL: %1$s | UL: %2$s</string>
 
     <!-- Tindakan Butang -->
     <string name="btn_start">Aktifkan Penstabil Rangkaian</string>
     <string name="btn_stop">Nyahaktifkan</string>
     <string name="btn_test_ping">Uji Kependaman Sekarang</string>
+    <string name="btn_split_tunnel">⚙️ Urus Aplikasi Dikecualikan (Split Tunnel)</string>
+
+    <!-- Dialog Pengecualian Aplikasi (Split Tunneling) -->
+    <string name="dialog_split_tunnel_title">Pilih Aplikasi Dikecualikan</string>
+    <string name="dialog_btn_save">Simpan</string>
+    <string name="dialog_btn_cancel">Batal</string>
+    <string name="toast_apps_saved">Tetapan disimpan (%1$d aplikasi)</string>
 
     <!-- Notifikasi Sistem (Foreground Service) -->
     <string name="notif_channel_name">Servis Pengoptimuman Rangkaian</string>
     <string name="notif_channel_desc">Pemberitahuan operasi kawalan trafik FlowPacer</string>
     <string name="notif_title_active">FlowPacer Sedang Beroperasi</string>
-    <string name="notif_desc_active">Mengawal aliran data dan menstabilkan kependaman.</string>
+    <string name="notif_desc_format">Profil: %1$s</string>
+    <string name="notif_mode_gaming">Mod Permua (Terkunci)</string>
+    <string name="notif_mode_unlimited">Mod Bebas (Tiada Had)</string>
+    <string name="notif_mode_auto">Mod Auto-Pintar (Adaptif)</string>
 
-    <!-- Mesej Ralat & Dialog -->
+    <!-- Jubin Pantas (Quick Settings Tile) -->
+    <string name="tile_state_active">Aktif</string>
+    <string name="tile_state_inactive">Mati</string>
+
+    <!-- Mesej Ralat & Kebenaran -->
     <string name="err_vpn_permission_denied">Kebenaran VPN diperlukan untuk mengawal antrean trafik.</string>
 </resources>
