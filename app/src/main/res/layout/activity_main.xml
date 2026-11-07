@@ -27,7 +27,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="Penstabil Kependaman &amp; Anti-Bufferbloat"
+            android:text="@string/app_subtitle"
             android:textColor="#94A3B8"
             android:textSize="14sp"
             app:layout_constraintStart_toStartOf="parent"
@@ -59,6 +59,7 @@
                     android:id="@+id/imgStatusIcon"
                     android:layout_width="56dp"
                     android:layout_height="56dp"
+                    android:contentDescription="@null"
                     app:tint="#64748B" />
 
                 <TextView
@@ -76,7 +77,8 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="Trafik bergerak pada laluan lalai tanpa kawalan antrean."
+                    android:gravity="center"
+                    android:text="@string/status_desc_idle"
                     android:textAlignment="center"
                     android:textColor="#94A3B8"
                     android:textSize="12sp" />
@@ -90,7 +92,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
-            android:text="PILIHAN PROFIL OPERASI"
+            android:text="@string/label_operation_profile"
             android:textColor="#64748B"
             android:textSize="12sp"
             android:textStyle="bold"
@@ -124,7 +126,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:checked="true"
-                    android:text="⚡ Auto-Pintar"
+                    android:text="@string/profile_auto"
                     android:textColor="#E2E8F0"
                     app:chipBackgroundColor="#334155" />
 
@@ -133,7 +135,7 @@
                     style="@style/Widget.MaterialComponents.Chip.Choice"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="🎮 Kunci Permua"
+                    android:text="@string/profile_gaming"
                     android:textColor="#E2E8F0"
                     app:chipBackgroundColor="#334155" />
 
@@ -142,20 +144,20 @@
                     style="@style/Widget.MaterialComponents.Chip.Choice"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="🚀 Tiada Had"
+                    android:text="@string/profile_unlimited"
                     android:textColor="#E2E8F0"
                     app:chipBackgroundColor="#334155" />
 
             </com.google.android.material.chip.ChipGroup>
         </HorizontalScrollView>
 
-        <!-- Ciri 5: Pemilihan Pelayan DNS -->
+        <!-- Pemilihan Pelayan DNS -->
         <TextView
             android:id="@+id/tvDnsLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="PELAYAN DNS TERPILIH"
+            android:text="@string/label_dns_server"
             android:textColor="#64748B"
             android:textSize="12sp"
             android:textStyle="bold"
@@ -189,7 +191,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:checked="true"
-                    android:text="🛡️ Cloudflare (1.1.1.1)"
+                    android:text="@string/dns_cloudflare"
                     android:textColor="#E2E8F0"
                     app:chipBackgroundColor="#334155" />
 
@@ -198,7 +200,7 @@
                     style="@style/Widget.MaterialComponents.Chip.Choice"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="🚫 AdGuard (Sekat Iklan)"
+                    android:text="@string/dns_adguard"
                     android:textColor="#E2E8F0"
                     app:chipBackgroundColor="#334155" />
 
@@ -207,7 +209,7 @@
                     style="@style/Widget.MaterialComponents.Chip.Choice"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="🌐 Google (8.8.8.8)"
+                    android:text="@string/dns_google"
                     android:textColor="#E2E8F0"
                     app:chipBackgroundColor="#334155" />
 
@@ -238,7 +240,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Metrik Operasi &amp; Data Sesi"
+                    android:text="@string/label_diagnostics_title"
                     android:textColor="#E2E8F0"
                     android:textSize="14sp"
                     android:textStyle="bold" />
@@ -258,7 +260,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Kependaman Semasa"
+                        android:text="@string/label_current_latency"
                         android:textColor="#94A3B8"
                         android:textSize="13sp" />
 
@@ -282,7 +284,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Siling Muat Naik Semasa"
+                        android:text="@string/label_upload_ceiling"
                         android:textColor="#94A3B8"
                         android:textSize="13sp" />
 
@@ -290,13 +292,13 @@
                         android:id="@+id/tvShaperLimit"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Dinamik Adaptif"
+                        android:text="@string/metric_shaper_dynamic"
                         android:textColor="#34D399"
                         android:textSize="13sp"
                         android:textStyle="bold" />
                 </LinearLayout>
 
-                <!-- Ciri 4: Baris Statistik Penggunaan Data Sesi -->
+                <!-- Baris Statistik Penggunaan Data Sesi -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -307,7 +309,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Trafik Terkawal Sesi"
+                        android:text="@string/label_session_traffic"
                         android:textColor="#94A3B8"
                         android:textSize="13sp" />
 
@@ -324,14 +326,14 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- Ciri 2: Butang Pengecualian Aplikasi (Split Tunneling) -->
+        <!-- Butang Pengecualian Aplikasi (Split Tunneling) -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnExcludedApps"
             style="@style/Widget.MaterialComponents.Button.TextButton"
             android:layout_width="0dp"
             android:layout_height="48dp"
             android:layout_marginTop="8dp"
-            android:text="⚙️ Urus Aplikasi Dikecualikan (Split Tunnel)"
+            android:text="@string/btn_split_tunnel"
             android:textColor="#94A3B8"
             android:textSize="13sp"
             app:layout_constraintEnd_toEndOf="parent"
