@@ -55,7 +55,18 @@ class MainActivity : AppCompatActivity() {
                 val dlMbps = intent.getDoubleExtra(FlowPacerService.EXTRA_DL_RATE_MBPS, -1.0)
                 val tx = intent.getLongExtra(FlowPacerService.EXTRA_TX_BYTES, 0L)
                 val rx = intent.getLongExtra(FlowPacerService.EXTRA_RX_BYTES, 0L)
+                val activeDns = intent.getStringExtra(FlowPacerService.EXTRA_ACTIVE_DNS)
 
+                // Kemas kini paparan DNS Aktif
+                if (!activeDns.isNullOrEmpty() && activeDns != "--") {
+                    binding.tvActiveDns.text = activeDns
+                    binding.tvActiveDns.setTextColor(Color.parseColor("#38BDF8"))
+                } else if (!FlowPacerService.isServiceRunning) {
+                    binding.tvActiveDns.text = getString(R.string.metric_dns_default)
+                    binding.tvActiveDns.setTextColor(Color.parseColor("#94A3B8"))
+                }
+
+                // Kemas kini paparan Kependaman (Ping)
                 if (ping >= 0) {
                     binding.tvPingValue.text = getString(R.string.metric_ping, ping)
                     when {
@@ -65,6 +76,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
+                // Kemas kini Siling Had Laju Shaper
                 when (FlowPacerService.activeMode) {
                     TokenBucket.MODE_GAMING -> {
                         binding.tvShaperLimit.text = getString(R.string.metric_shaper_gaming)
@@ -84,13 +96,13 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
+                // Kemas kini Trafik Terkawal Sesi
                 binding.tvSessionTraffic.text = getString(
                     R.string.metric_traffic_format,
                     formatBytes(rx),
                     formatBytes(tx)
                 )
 
-                // Segerakkan paparan status utama jika servis sedang berjalan
                 updateUiState()
             }
         }
@@ -113,6 +125,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         syncSelectedChipWithService()
+        syncSavedDnsSelection()
         updateUiState()
 
         val filter = IntentFilter(FlowPacerService.ACTION_METRICS_UPDATE)
@@ -157,6 +170,7 @@ class MainActivity : AppCompatActivity() {
             showAppExclusionDialog()
         }
 
+        // Pemilihan Profil Operasi
         binding.chipGroupMode.setOnCheckedStateChangeListener { _, checkedIds ->
             if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
 
@@ -170,36 +184,43 @@ class MainActivity : AppCompatActivity() {
             updateModeDiagnostics(selectedMode)
         }
 
+        // Pemilihan Pelayan DNS (Auto atau Manual)
         binding.chipGroupDns.setOnCheckedStateChangeListener { _, checkedIds ->
             if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
 
-            val dnsType = when (checkedIds.first()) {
-                R.id.chipDnsAdGuard -> FlowPacerService.DNS_ADGUARD
-                R.id.chipDnsGoogle -> FlowPacerService.DNS_GOOGLE
-                else -> FlowPacerService.DNS_CLOUDFLARE
+            val (dnsType, dnsName) = when (checkedIds.first()) {
+                R.id.chipDnsCloudflareSec -> FlowPacerService.DNS_CLOUDFLARE_SEC to "Cloudflare Sec (1.1.1.2)"
+                R.id.chipDnsQuad9 -> FlowPacerService.DNS_QUAD9 to "Quad9 (9.9.9.9)"
+                R.id.chipDnsOpenDns -> FlowPacerService.DNS_OPENDNS to "OpenDNS Cisco"
+                R.id.chipDnsCloudflare -> FlowPacerService.DNS_CLOUDFLARE to "Cloudflare (1.1.1.1)"
+                R.id.chipDnsAdGuard -> FlowPacerService.DNS_ADGUARD to "AdGuard (Sekat Iklan)"
+                R.id.chipDnsGoogle -> FlowPacerService.DNS_GOOGLE to "Google (8.8.8.8)"
+                else -> FlowPacerService.DNS_AUTO to "Auto (Ping Terpantas)"
             }
 
             val prefs = getSharedPreferences(FlowPacerService.PREFS_NAME, Context.MODE_PRIVATE)
             prefs.edit().putInt(FlowPacerService.PREF_DNS_TYPE, dnsType).apply()
 
             if (FlowPacerService.isServiceRunning) {
-                Toast.makeText(this, getString(R.string.toast_dns_restart_needed), Toast.LENGTH_SHORT).show()
+                dispatchDnsChange(dnsType)
+                Toast.makeText(this, getString(R.string.toast_dns_switched, dnsName), Toast.LENGTH_SHORT).show()
             }
         }
     }
 
     private fun syncSavedDnsSelection() {
         val prefs = getSharedPreferences(FlowPacerService.PREFS_NAME, Context.MODE_PRIVATE)
-        when (prefs.getInt(FlowPacerService.PREF_DNS_TYPE, FlowPacerService.DNS_CLOUDFLARE)) {
+        when (prefs.getInt(FlowPacerService.PREF_DNS_TYPE, FlowPacerService.DNS_AUTO)) {
+            FlowPacerService.DNS_CLOUDFLARE_SEC -> binding.chipDnsCloudflareSec.isChecked = true
+            FlowPacerService.DNS_QUAD9 -> binding.chipDnsQuad9.isChecked = true
+            FlowPacerService.DNS_OPENDNS -> binding.chipDnsOpenDns.isChecked = true
+            FlowPacerService.DNS_CLOUDFLARE -> binding.chipDnsCloudflare.isChecked = true
             FlowPacerService.DNS_ADGUARD -> binding.chipDnsAdGuard.isChecked = true
             FlowPacerService.DNS_GOOGLE -> binding.chipDnsGoogle.isChecked = true
-            else -> binding.chipDnsCloudflare.isChecked = true
+            else -> binding.chipDnsAuto.isChecked = true
         }
     }
 
-    /**
-     * Memuatkan senarai aplikasi di latar belakang (IO Thread) bagi mengelakkan pembekuan UI (ANR).
-     */
     private fun showAppExclusionDialog() {
         binding.btnExcludedApps.isEnabled = false
 
@@ -249,6 +270,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun dispatchDnsChange(dnsType: Int) {
+        if (FlowPacerService.isServiceRunning) {
+            val intent = Intent(this, FlowPacerService::class.java).apply {
+                action = FlowPacerService.ACTION_SET_DNS
+                putExtra(FlowPacerService.EXTRA_DNS_TYPE, dnsType)
+            }
+            startService(intent)
+        }
+    }
+
     private fun syncSelectedChipWithService() {
         when (FlowPacerService.activeMode) {
             TokenBucket.MODE_GAMING -> binding.chipGaming.isChecked = true
@@ -285,6 +316,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startFlowPacerService() {
+        binding.tvActiveDns.text = getString(R.string.metric_dns_measuring)
         val intent = Intent(this, FlowPacerService::class.java).apply {
             action = FlowPacerService.ACTION_START
         }
@@ -301,6 +333,7 @@ class MainActivity : AppCompatActivity() {
             action = FlowPacerService.ACTION_STOP
         }
         startService(intent)
+        binding.tvActiveDns.text = getString(R.string.metric_dns_default)
         binding.root.postDelayed({ updateUiState() }, 200)
     }
 
@@ -321,6 +354,7 @@ class MainActivity : AppCompatActivity() {
             binding.imgStatusIcon.setColorFilter(Color.parseColor("#64748B"))
             binding.btnToggleService.text = getString(R.string.btn_start)
             binding.btnToggleService.setBackgroundColor(Color.parseColor("#0284C7"))
+            binding.tvActiveDns.text = getString(R.string.metric_dns_default)
         }
     }
 
