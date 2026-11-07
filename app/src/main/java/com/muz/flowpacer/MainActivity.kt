@@ -57,7 +57,7 @@ class MainActivity : AppCompatActivity() {
                 val rx = intent.getLongExtra(FlowPacerService.EXTRA_RX_BYTES, 0L)
 
                 if (ping >= 0) {
-                    binding.tvPingValue.text = "$ping ms"
+                    binding.tvPingValue.text = getString(R.string.metric_ping, ping)
                     when {
                         ping < 100 -> binding.tvPingValue.setTextColor(Color.parseColor("#34D399")) // Hijau
                         ping < 200 -> binding.tvPingValue.setTextColor(Color.parseColor("#FBBF24")) // Kuning
@@ -67,24 +67,31 @@ class MainActivity : AppCompatActivity() {
 
                 when (FlowPacerService.activeMode) {
                     TokenBucket.MODE_GAMING -> {
-                        binding.tvShaperLimit.text = "Kunci (UL: 3.8M | DL: 12M)"
+                        binding.tvShaperLimit.text = getString(R.string.metric_shaper_gaming)
                         binding.tvShaperLimit.setTextColor(Color.parseColor("#FBBF24"))
                     }
                     TokenBucket.MODE_UNLIMITED -> {
-                        binding.tvShaperLimit.text = "Tiada Had (Bypass)"
+                        binding.tvShaperLimit.text = getString(R.string.metric_shaper_unlimited)
                         binding.tvShaperLimit.setTextColor(Color.parseColor("#38BDF8"))
                     }
                     else -> {
                         if (ulMbps > 0 && dlMbps > 0) {
-                            binding.tvShaperLimit.text = String.format(Locale.US, "UL: %.1fM | DL: %.0fM", ulMbps, dlMbps)
+                            binding.tvShaperLimit.text = getString(R.string.metric_shaper_limit, ulMbps, dlMbps)
                         } else {
-                            binding.tvShaperLimit.text = "Dinamik Adaptif"
+                            binding.tvShaperLimit.text = getString(R.string.metric_shaper_dynamic)
                         }
                         binding.tvShaperLimit.setTextColor(Color.parseColor("#34D399"))
                     }
                 }
 
-                binding.tvSessionTraffic.text = "DL: ${formatBytes(rx)} | UL: ${formatBytes(tx)}"
+                binding.tvSessionTraffic.text = getString(
+                    R.string.metric_traffic_format,
+                    formatBytes(rx),
+                    formatBytes(tx)
+                )
+
+                // Segerakkan paparan status utama jika servis sedang berjalan
+                updateUiState()
             }
         }
     }
@@ -176,7 +183,7 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putInt(FlowPacerService.PREF_DNS_TYPE, dnsType).apply()
 
             if (FlowPacerService.isServiceRunning) {
-                Toast.makeText(this, "Mulakan semula servis untuk mengaktifkan DNS baru", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.toast_dns_restart_needed), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -190,36 +197,46 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Memuatkan senarai aplikasi di latar belakang (IO Thread) bagi mengelakkan pembekuan UI (ANR).
+     */
     private fun showAppExclusionDialog() {
-        val pm = packageManager
-        val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
-            addCategory(Intent.CATEGORY_LAUNCHER)
-        }
-        val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
-            .filter { it.activityInfo.packageName != packageName }
-            .sortedBy { it.loadLabel(pm).toString() }
+        binding.btnExcludedApps.isEnabled = false
 
-        val appNames = resolveInfos.map { it.loadLabel(pm).toString() }.toTypedArray()
-        val appPackages = resolveInfos.map { it.activityInfo.packageName }.toTypedArray()
-
-        val prefs = getSharedPreferences(FlowPacerService.PREFS_NAME, Context.MODE_PRIVATE)
-        val savedExcluded = prefs.getStringSet(FlowPacerService.PREF_EXCLUDED_APPS, emptySet())?.toMutableSet() ?: mutableSetOf()
-        val checkedItems = BooleanArray(appPackages.size) { idx ->
-            savedExcluded.contains(appPackages[idx])
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("Pilih Aplikasi Dikecualikan")
-            .setMultiChoiceItems(appNames, checkedItems) { _, which, isChecked ->
-                val pkg = appPackages[which]
-                if (isChecked) savedExcluded.add(pkg) else savedExcluded.remove(pkg)
+        lifecycleScope.launch(Dispatchers.IO) {
+            val pm = packageManager
+            val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
             }
-            .setPositiveButton("Simpan") { _, _ ->
-                prefs.edit().putStringSet(FlowPacerService.PREF_EXCLUDED_APPS, savedExcluded).apply()
-                Toast.makeText(this, "Tetapan disimpan (${savedExcluded.size} aplikasi)", Toast.LENGTH_SHORT).show()
+            val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
+                .filter { it.activityInfo.packageName != packageName }
+                .sortedBy { it.loadLabel(pm).toString().lowercase(Locale.ROOT) }
+
+            val appNames = resolveInfos.map { it.loadLabel(pm).toString() }.toTypedArray()
+            val appPackages = resolveInfos.map { it.activityInfo.packageName }.toTypedArray()
+
+            val prefs = getSharedPreferences(FlowPacerService.PREFS_NAME, Context.MODE_PRIVATE)
+            val savedExcluded = prefs.getStringSet(FlowPacerService.PREF_EXCLUDED_APPS, emptySet())?.toMutableSet() ?: mutableSetOf()
+            val checkedItems = BooleanArray(appPackages.size) { idx ->
+                savedExcluded.contains(appPackages[idx])
             }
-            .setNegativeButton("Batal", null)
-            .show()
+
+            withContext(Dispatchers.Main) {
+                binding.btnExcludedApps.isEnabled = true
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle(getString(R.string.dialog_split_tunnel_title))
+                    .setMultiChoiceItems(appNames, checkedItems) { _, which, isChecked ->
+                        val pkg = appPackages[which]
+                        if (isChecked) savedExcluded.add(pkg) else savedExcluded.remove(pkg)
+                    }
+                    .setPositiveButton(getString(R.string.dialog_btn_save)) { _, _ ->
+                        prefs.edit().putStringSet(FlowPacerService.PREF_EXCLUDED_APPS, savedExcluded).apply()
+                        Toast.makeText(this@MainActivity, getString(R.string.toast_apps_saved, savedExcluded.size), Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton(getString(R.string.dialog_btn_cancel), null)
+                    .show()
+            }
+        }
     }
 
     private fun dispatchModeChange(mode: Int) {
@@ -244,15 +261,15 @@ class MainActivity : AppCompatActivity() {
     private fun updateModeDiagnostics(mode: Int) {
         when (mode) {
             TokenBucket.MODE_GAMING -> {
-                binding.tvShaperLimit.text = "Kunci (UL: 3.8M | DL: 12M)"
+                binding.tvShaperLimit.text = getString(R.string.metric_shaper_gaming)
                 binding.tvShaperLimit.setTextColor(Color.parseColor("#FBBF24"))
             }
             TokenBucket.MODE_UNLIMITED -> {
-                binding.tvShaperLimit.text = "Tiada Had (Bypass)"
+                binding.tvShaperLimit.text = getString(R.string.metric_shaper_unlimited)
                 binding.tvShaperLimit.setTextColor(Color.parseColor("#38BDF8"))
             }
             else -> {
-                binding.tvShaperLimit.text = "Dinamik Adaptif"
+                binding.tvShaperLimit.text = getString(R.string.metric_shaper_dynamic)
                 binding.tvShaperLimit.setTextColor(Color.parseColor("#34D399"))
             }
         }
@@ -276,7 +293,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             startService(intent)
         }
-        binding.root.postDelayed({ updateUiState() }, 350)
+        binding.root.postDelayed({ updateUiState() }, 200)
     }
 
     private fun stopFlowPacerService() {
@@ -284,7 +301,7 @@ class MainActivity : AppCompatActivity() {
             action = FlowPacerService.ACTION_STOP
         }
         startService(intent)
-        binding.root.postDelayed({ updateUiState() }, 350)
+        binding.root.postDelayed({ updateUiState() }, 200)
     }
 
     private fun updateUiState() {
@@ -292,14 +309,14 @@ class MainActivity : AppCompatActivity() {
 
         if (isRunning) {
             binding.tvStatusTitle.text = getString(R.string.status_running)
-            binding.tvStatusDesc.text = "Perlindungan aktif. Kawalan kependaman dua hala sedang berjalan."
+            binding.tvStatusDesc.text = getString(R.string.status_desc_running)
             binding.imgStatusIcon.setImageResource(android.R.drawable.ic_lock_idle_charging)
             binding.imgStatusIcon.setColorFilter(Color.parseColor("#34D399"))
             binding.btnToggleService.text = getString(R.string.btn_stop)
             binding.btnToggleService.setBackgroundColor(Color.parseColor("#DC2626"))
         } else {
             binding.tvStatusTitle.text = getString(R.string.status_idle)
-            binding.tvStatusDesc.text = "Trafik bergerak pada laluan lalai tanpa kawalan antrean."
+            binding.tvStatusDesc.text = getString(R.string.status_desc_idle)
             binding.imgStatusIcon.setImageResource(android.R.drawable.ic_lock_idle_lock)
             binding.imgStatusIcon.setColorFilter(Color.parseColor("#64748B"))
             binding.btnToggleService.text = getString(R.string.btn_start)
@@ -308,24 +325,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun runLatencyTest() {
-        binding.tvPingValue.text = "Menguji..."
+        binding.tvPingValue.text = getString(R.string.metric_ping_testing)
         binding.btnTestPing.isEnabled = false
 
         lifecycleScope.launch(Dispatchers.IO) {
-            // Tembak Cloudflare dan Google serentak, ambil keputusan terpantas
             val pingMs = measureBestLatency(2500)
 
             withContext(Dispatchers.Main) {
                 binding.btnTestPing.isEnabled = true
                 if (pingMs >= 0) {
-                    binding.tvPingValue.text = "$pingMs ms"
+                    binding.tvPingValue.text = getString(R.string.metric_ping, pingMs)
                     when {
                         pingMs < 100 -> binding.tvPingValue.setTextColor(Color.parseColor("#34D399"))
                         pingMs < 200 -> binding.tvPingValue.setTextColor(Color.parseColor("#FBBF24"))
                         else -> binding.tvPingValue.setTextColor(Color.parseColor("#F87171"))
                     }
                 } else {
-                    binding.tvPingValue.text = "Gagal"
+                    binding.tvPingValue.text = getString(R.string.metric_ping_failed)
                     binding.tvPingValue.setTextColor(Color.parseColor("#EF4444"))
                 }
             }
@@ -340,14 +356,15 @@ class MainActivity : AppCompatActivity() {
         val deferreds = targets.map { (host, port) ->
             async {
                 val socket = Socket()
-                val start = System.currentTimeMillis()
                 try {
+                    val start = System.currentTimeMillis()
                     socket.connect(InetSocketAddress(host, port), timeoutMs)
                     val duration = System.currentTimeMillis() - start
-                    socket.close()
                     duration
                 } catch (_: Exception) {
                     -1L
+                } finally {
+                    try { socket.close() } catch (_: Exception) {}
                 }
             }
         }
