@@ -15,6 +15,7 @@ import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.muz.flowpacer.MainActivity
 import com.muz.flowpacer.R
+import com.muz.flowpacer.engine.PacketInspector
 import com.muz.flowpacer.engine.TokenBucket
 import com.muz.flowpacer.proxy.LocalProxyServer
 import kotlinx.coroutines.CoroutineScope
@@ -27,8 +28,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.Collections
 
 class FlowPacerService : VpnService() {
 
@@ -36,6 +43,7 @@ class FlowPacerService : VpnService() {
     private var proxyServer: LocalProxyServer? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
     private var adaptiveMonitorJob: Job? = null
+    private var tunWorkerJob: Job? = null
 
     private val uploadTokenBucket = TokenBucket(
         maxTokens = 16 * 1024,
@@ -50,6 +58,9 @@ class FlowPacerService : VpnService() {
     private var currentAdaptiveUploadMbps = 3.8
     private var currentAdaptiveDownloadMbps = 16.0
     private var baselinePing = 0L
+
+    // Tetingkap bergerak untuk mengelakkan perangkap baseline ping
+    private val pingHistory = Collections.synchronizedList(mutableListOf<Long>())
 
     companion object {
         const val ACTION_START = "com.muz.flowpacer.START"
@@ -108,6 +119,9 @@ class FlowPacerService : VpnService() {
         if (mode == TokenBucket.MODE_GAMING) {
             uploadTokenBucket.adjustRate(3.8)
             downloadTokenBucket.adjustRate(12.0)
+        } else if (mode == TokenBucket.MODE_AUTO) {
+            uploadTokenBucket.adjustRate(currentAdaptiveUploadMbps)
+            downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
         }
 
         updateNotification()
@@ -123,6 +137,7 @@ class FlowPacerService : VpnService() {
         startForegroundNotification()
 
         try {
+            // 1. Mulakan Enjin Kawalan Trafik HTTP/HTTPS (TCP)
             proxyServer = LocalProxyServer(
                 port = PROXY_PORT,
                 uploadTokenBucket = uploadTokenBucket,
@@ -132,10 +147,12 @@ class FlowPacerService : VpnService() {
                 start()
             }
 
+            // 2. Konfigurasi Antaramuka TUN Layer 3
             val builder = Builder()
                 .setSession(getString(R.string.app_name))
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 32)
+                .addRoute("0.0.0.0", 0)
 
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val dnsChoice = prefs.getInt(PREF_DNS_TYPE, DNS_CLOUDFLARE)
@@ -154,10 +171,12 @@ class FlowPacerService : VpnService() {
                 }
             }
 
+            // Kecualikan aplikasi kita sendiri agar soket tidak berulang (loopback)
             try {
                 builder.addDisallowedApplication(packageName)
             } catch (_: PackageManager.NameNotFoundException) {}
 
+            // Pengendalian Split-Tunneling untuk aplikasi terpilih
             val excludedApps = prefs.getStringSet(PREF_EXCLUDED_APPS, emptySet()) ?: emptySet()
             for (pkg in excludedApps) {
                 try {
@@ -165,6 +184,7 @@ class FlowPacerService : VpnService() {
                 } catch (_: Exception) {}
             }
 
+            // Tetapkan laluan Proksi bagi trafik TCP sistem pada Android 10+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setHttpProxy(
                     ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT)
@@ -174,6 +194,7 @@ class FlowPacerService : VpnService() {
             vpnInterface = builder.establish()
             isServiceRunning = true
 
+            startTunPacketWorker()
             startAdaptiveFeedbackLoop()
 
         } catch (e: Exception) {
@@ -182,17 +203,58 @@ class FlowPacerService : VpnService() {
         }
     }
 
+    /**
+     * Memproses paket mentah dari antaramuka TUN (Layer 3).
+     * Memberi laluan pintas tanpa henti bagi paket permua UDP dan DNS.
+     */
+    private fun startTunPacketWorker() {
+        val pfd = vpnInterface ?: return
+        val vpnInput = FileInputStream(pfd.fileDescriptor)
+        val vpnOutput = FileOutputStream(pfd.fileDescriptor)
+
+        tunWorkerJob?.cancel()
+        tunWorkerJob = serviceScope.launch(Dispatchers.IO) {
+            val packetBuffer = ByteArray(32767)
+
+            try {
+                while (isActive && isServiceRunning) {
+                    val length = vpnInput.read(packetBuffer)
+                    if (length <= 0) continue
+
+                    val isPriority = PacketInspector.isHighPriority(packetBuffer, length)
+                    val protocol = PacketInspector.getProtocol(packetBuffer, length)
+
+                    if (isPriority) {
+                        // Laluan Ekspres: Paket permua UDP/DNS dilepaskan serta-merta tanpa ditahan
+                    } else if (protocol == PacketInspector.PROTOCOL_UDP) {
+                        // Paket UDP bukan keutamaan diimbangi oleh baldi token muat naik
+                        val delayMs = uploadTokenBucket.acquire(length)
+                        if (delayMs > 0) delay(delayMs)
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                try { vpnInput.close() } catch (_: Exception) {}
+                try { vpnOutput.close() } catch (_: Exception) {}
+            }
+        }
+    }
+
     private fun startAdaptiveFeedbackLoop() {
         adaptiveMonitorJob?.cancel()
         adaptiveMonitorJob = serviceScope.launch {
             while (isActive) {
-                // Tembak Cloudflare dan Google serentak, ambil kependaman terendah
                 val ping = probeBestLatency(2000)
 
                 if (ping > 0) {
-                    if (baselinePing == 0L || ping < baselinePing) {
-                        baselinePing = ping
+                    // Selenggara tetingkap bergerak 15 sampel kependaman
+                    pingHistory.add(ping)
+                    if (pingHistory.size > 15) {
+                        pingHistory.removeAt(0)
                     }
+
+                    // Paras lantai dinamik mengikut sampel terendah semasa
+                    baselinePing = pingHistory.minOrNull() ?: ping
 
                     if (activeMode == TokenBucket.MODE_AUTO) {
                         val bloatDelta = ping - baselinePing
@@ -260,15 +322,16 @@ class FlowPacerService : VpnService() {
 
     private fun probeSingleSocket(host: String, port: Int, timeoutMs: Int): Long {
         val socket = Socket()
-        protect(socket)
-        val start = System.currentTimeMillis()
         return try {
+            protect(socket)
+            val start = System.currentTimeMillis()
             socket.connect(InetSocketAddress(host, port), timeoutMs)
             val duration = System.currentTimeMillis() - start
-            socket.close()
             duration
         } catch (_: Exception) {
             -1L
+        } finally {
+            try { socket.close() } catch (_: Exception) {}
         }
     }
 
@@ -291,6 +354,12 @@ class FlowPacerService : VpnService() {
         adaptiveMonitorJob?.cancel()
         adaptiveMonitorJob = null
 
+        tunWorkerJob?.cancel()
+        tunWorkerJob = null
+
+        pingHistory.clear()
+        baselinePing = 0L
+
         try {
             proxyServer?.stop()
             proxyServer = null
@@ -310,7 +379,8 @@ class FlowPacerService : VpnService() {
         createNotificationChannel()
         val notification = buildNotification()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // Selesaikan isu crash pada Android 10-13 (Hanya API 34+ menyokong FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
                 notification,
@@ -338,14 +408,14 @@ class FlowPacerService : VpnService() {
         )
 
         val modeLabel = when (activeMode) {
-            TokenBucket.MODE_GAMING -> "Mod Permua (Terkunci)"
-            TokenBucket.MODE_UNLIMITED -> "Mod Bebas (Tiada Had)"
-            else -> "Mod Auto-Pintar (Adaptif)"
+            TokenBucket.MODE_GAMING -> getString(R.string.notif_mode_gaming)
+            TokenBucket.MODE_UNLIMITED -> getString(R.string.notif_mode_unlimited)
+            else -> getString(R.string.notif_mode_auto)
         }
 
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.notif_title_active))
-            .setContentText("Profil: $modeLabel")
+            .setContentText(getString(R.string.notif_desc_format, modeLabel))
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
