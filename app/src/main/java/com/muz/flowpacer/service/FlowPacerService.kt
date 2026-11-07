@@ -30,14 +30,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.Collections
 
 class FlowPacerService : VpnService() {
+
+    data class DnsCandidate(
+        val typeId: Int,
+        val label: String,
+        val primaryIp: String,
+        val secondaryIp: String
+    )
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var proxyServer: LocalProxyServer? = null
@@ -62,26 +66,46 @@ class FlowPacerService : VpnService() {
     // Tetingkap bergerak untuk mengelakkan perangkap baseline ping
     private val pingHistory = Collections.synchronizedList(mutableListOf<Long>())
 
+    @Volatile
+    private var activeDnsDisplayName: String = "--"
+
     companion object {
         const val ACTION_START = "com.muz.flowpacer.START"
         const val ACTION_STOP = "com.muz.flowpacer.STOP"
         const val ACTION_SET_MODE = "com.muz.flowpacer.SET_MODE"
+        const val ACTION_SET_DNS = "com.muz.flowpacer.SET_DNS"
         const val ACTION_METRICS_UPDATE = "com.muz.flowpacer.METRICS_UPDATE"
 
         const val EXTRA_MODE = "extra_mode"
+        const val EXTRA_DNS_TYPE = "extra_dns_type"
         const val EXTRA_PING = "extra_ping"
         const val EXTRA_RATE_MBPS = "extra_rate_mbps"
         const val EXTRA_DL_RATE_MBPS = "extra_dl_rate_mbps"
         const val EXTRA_TX_BYTES = "extra_tx_bytes"
         const val EXTRA_RX_BYTES = "extra_rx_bytes"
+        const val EXTRA_ACTIVE_DNS = "extra_active_dns"
 
         const val PREFS_NAME = "flowpacer_prefs"
         const val PREF_EXCLUDED_APPS = "excluded_apps"
         const val PREF_DNS_TYPE = "dns_type"
 
-        const val DNS_CLOUDFLARE = 0
-        const val DNS_ADGUARD = 1
-        const val DNS_GOOGLE = 2
+        // Pengenalan Jenis DNS
+        const val DNS_AUTO = 0
+        const val DNS_CLOUDFLARE_SEC = 1
+        const val DNS_QUAD9 = 2
+        const val DNS_OPENDNS = 3
+        const val DNS_CLOUDFLARE = 4
+        const val DNS_ADGUARD = 5
+        const val DNS_GOOGLE = 6
+
+        val DNS_SERVERS = listOf(
+            DnsCandidate(DNS_CLOUDFLARE_SEC, "Cloudflare Sec", "1.1.1.2", "1.0.0.2"),
+            DnsCandidate(DNS_QUAD9, "Quad9", "9.9.9.9", "149.112.112.112"),
+            DnsCandidate(DNS_OPENDNS, "OpenDNS Cisco", "208.67.222.123", "208.67.220.123"),
+            DnsCandidate(DNS_CLOUDFLARE, "Cloudflare", "1.1.1.1", "1.0.0.1"),
+            DnsCandidate(DNS_ADGUARD, "AdGuard", "94.140.14.14", "94.140.15.15"),
+            DnsCandidate(DNS_GOOGLE, "Google", "8.8.8.8", "8.8.4.4")
+        )
 
         const val NOTIFICATION_CHANNEL_ID = "flowpacer_service_channel"
         const val NOTIFICATION_ID = 1001
@@ -102,6 +126,14 @@ class FlowPacerService : VpnService() {
             ACTION_SET_MODE -> {
                 val newMode = intent.getIntExtra(EXTRA_MODE, TokenBucket.MODE_AUTO)
                 setOperationalMode(newMode)
+            }
+            ACTION_SET_DNS -> {
+                val newDns = intent.getIntExtra(EXTRA_DNS_TYPE, DNS_AUTO)
+                if (isServiceRunning) {
+                    serviceScope.launch {
+                        applyDnsSelection(newDns)
+                    }
+                }
             }
             ACTION_START -> startOptimization()
             else -> {
@@ -136,87 +168,129 @@ class FlowPacerService : VpnService() {
 
         startForegroundNotification()
 
-        try {
-            // 1. Mulakan Enjin Kawalan Trafik HTTP/HTTPS (TCP)
-            proxyServer = LocalProxyServer(
-                port = PROXY_PORT,
-                uploadTokenBucket = uploadTokenBucket,
-                downloadTokenBucket = downloadTokenBucket,
-                onProtectSocket = { socket -> protect(socket) }
-            ).apply {
-                start()
-            }
-
-            // 2. Konfigurasi Antaramuka TUN Layer 3
-            val builder = Builder()
-                .setSession(getString(R.string.app_name))
-                .setMtu(1500)
-                .addAddress("10.0.0.2", 32)
-                .addRoute("0.0.0.0", 0)
-
-            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val dnsChoice = prefs.getInt(PREF_DNS_TYPE, DNS_CLOUDFLARE)
-            when (dnsChoice) {
-                DNS_ADGUARD -> {
-                    builder.addDnsServer("94.140.14.14")
-                    builder.addDnsServer("94.140.15.15")
-                }
-                DNS_GOOGLE -> {
-                    builder.addDnsServer("8.8.8.8")
-                    builder.addDnsServer("8.8.4.4")
-                }
-                else -> {
-                    builder.addDnsServer("1.1.1.1")
-                    builder.addDnsServer("1.0.0.1")
-                }
-            }
-
-            // Kecualikan aplikasi kita sendiri agar soket tidak berulang (loopback)
+        serviceScope.launch {
             try {
-                builder.addDisallowedApplication(packageName)
-            } catch (_: PackageManager.NameNotFoundException) {}
+                // 1. Mulakan Proksi Tempatan
+                proxyServer = LocalProxyServer(
+                    port = PROXY_PORT,
+                    uploadTokenBucket = uploadTokenBucket,
+                    downloadTokenBucket = downloadTokenBucket,
+                    onProtectSocket = { socket -> protect(socket) }
+                ).apply {
+                    start()
+                }
 
-            // Pengendalian Split-Tunneling untuk aplikasi terpilih
-            val excludedApps = prefs.getStringSet(PREF_EXCLUDED_APPS, emptySet()) ?: emptySet()
-            for (pkg in excludedApps) {
-                try {
-                    builder.addDisallowedApplication(pkg)
-                } catch (_: Exception) {}
+                // 2. Tentukan dan Bina Antaramuka DNS + L3 VPN
+                val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val dnsType = prefs.getInt(PREF_DNS_TYPE, DNS_AUTO)
+                buildVpnTunInterface(dnsType)
+
+                isServiceRunning = true
+
+                startTunPacketWorker()
+                startAdaptiveFeedbackLoop()
+                updateNotification()
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+                stopOptimization()
             }
-
-            // Tetapkan laluan Proksi bagi trafik TCP sistem pada Android 10+
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                builder.setHttpProxy(
-                    ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT)
-                )
-            }
-
-            vpnInterface = builder.establish()
-            isServiceRunning = true
-
-            startTunPacketWorker()
-            startAdaptiveFeedbackLoop()
-
-        } catch (e: Exception) {
-            e.printStackTrace()
-            stopOptimization()
         }
     }
 
     /**
-     * Memproses paket mentah dari antaramuka TUN (Layer 3).
-     * Memberi laluan pintas tanpa henti bagi paket permua UDP dan DNS.
+     * Menguji dan memilih DNS paling laju atau mengunci pelayan manual pilihan pengguna.
      */
-    private fun startTunPacketWorker() {
-        val pfd = vpnInterface ?: return
-        val vpnInput = FileInputStream(pfd.fileDescriptor)
-        val vpnOutput = FileOutputStream(pfd.fileDescriptor)
+    private suspend fun resolveTargetDns(dnsType: Int): Pair<DnsCandidate, Boolean> {
+        if (dnsType == DNS_AUTO) {
+            // Tembak semua DNS serentak, cari yang mencatat kependaman terendah
+            val fastest = findFastestDns()
+            return fastest to true
+        }
 
+        val manual = DNS_SERVERS.find { it.typeId == dnsType } ?: DNS_SERVERS[0]
+        return manual to false
+    }
+
+    private suspend fun findFastestDns(): DnsCandidate = withContext(Dispatchers.IO) {
+        val deferredList = DNS_SERVERS.map { candidate ->
+            async {
+                val ping = probePortLatency(candidate.primaryIp, 53, 1200)
+                candidate to ping
+            }
+        }
+        val results = deferredList.awaitAll()
+        val successful = results.filter { it.second >= 0 }
+        val winner = successful.minByOrNull { it.second }?.first ?: DNS_SERVERS[0]
+        winner
+    }
+
+    /**
+     * Membina atau mengemas kini sambungan antaramuka TUN VPN secara selamat (Hot-Reload).
+     */
+    private suspend fun buildVpnTunInterface(dnsType: Int) = withContext(Dispatchers.IO) {
+        val (selectedDns, isAuto) = resolveTargetDns(dnsType)
+
+        val builder = Builder()
+            .setSession(getString(R.string.app_name))
+            .setMtu(1500)
+            .addAddress("10.0.0.2", 32)
+            .addRoute("0.0.0.0", 0)
+
+        // Masukkan IP Utama & Sandaran DNS terpilih
+        builder.addDnsServer(selectedDns.primaryIp)
+        builder.addDnsServer(selectedDns.secondaryIp)
+
+        // Kecualikan pakej sendiri bagi mengelakkan loopback
+        try {
+            builder.addDisallowedApplication(packageName)
+        } catch (_: PackageManager.NameNotFoundException) {}
+
+        // Pengendalian Split Tunneling aplikasi
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val excludedApps = prefs.getStringSet(PREF_EXCLUDED_APPS, emptySet()) ?: emptySet()
+        for (pkg in excludedApps) {
+            try {
+                builder.addDisallowedApplication(pkg)
+            } catch (_: Exception) {}
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            builder.setHttpProxy(
+                ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT)
+            )
+        }
+
+        val oldInterface = vpnInterface
+        vpnInterface = builder.establish()
+
+        try {
+            oldInterface?.close()
+        } catch (_: Exception) {}
+
+        activeDnsDisplayName = if (isAuto) "${selectedDns.label} [Auto]" else "${selectedDns.label} [Manual]"
+    }
+
+    private suspend fun applyDnsSelection(dnsType: Int) {
+        buildVpnTunInterface(dnsType)
+        startTunPacketWorker()
+        updateNotification()
+        broadcastMetrics(-1L, currentAdaptiveUploadMbps, currentAdaptiveDownloadMbps)
+    }
+
+    private fun startTunPacketWorker() {
         tunWorkerJob?.cancel()
+        val pfd = vpnInterface ?: return
+
         tunWorkerJob = serviceScope.launch(Dispatchers.IO) {
-            val packetBuffer = ByteArray(32767)
+            var vpnInput: FileInputStream? = null
+            var vpnOutput: FileOutputStream? = null
 
             try {
+                vpnInput = FileInputStream(pfd.fileDescriptor)
+                vpnOutput = FileOutputStream(pfd.fileDescriptor)
+                val packetBuffer = ByteArray(32767)
+
                 while (isActive && isServiceRunning) {
                     val length = vpnInput.read(packetBuffer)
                     if (length <= 0) continue
@@ -225,17 +299,16 @@ class FlowPacerService : VpnService() {
                     val protocol = PacketInspector.getProtocol(packetBuffer, length)
 
                     if (isPriority) {
-                        // Laluan Ekspres: Paket permua UDP/DNS dilepaskan serta-merta tanpa ditahan
+                        // Laluan Ekspres: Dihantar serta-merta tanpa senggang masa
                     } else if (protocol == PacketInspector.PROTOCOL_UDP) {
-                        // Paket UDP bukan keutamaan diimbangi oleh baldi token muat naik
                         val delayMs = uploadTokenBucket.acquire(length)
                         if (delayMs > 0) delay(delayMs)
                     }
                 }
             } catch (_: Exception) {
             } finally {
-                try { vpnInput.close() } catch (_: Exception) {}
-                try { vpnOutput.close() } catch (_: Exception) {}
+                try { vpnInput?.close() } catch (_: Exception) {}
+                try { vpnOutput?.close() } catch (_: Exception) {}
             }
         }
     }
@@ -247,44 +320,39 @@ class FlowPacerService : VpnService() {
                 val ping = probeBestLatency(2000)
 
                 if (ping > 0) {
-                    // Selenggara tetingkap bergerak 15 sampel kependaman
                     pingHistory.add(ping)
                     if (pingHistory.size > 15) {
                         pingHistory.removeAt(0)
                     }
 
-                    // Paras lantai dinamik mengikut sampel terendah semasa
                     baselinePing = pingHistory.minOrNull() ?: ping
 
                     if (activeMode == TokenBucket.MODE_AUTO) {
                         val bloatDelta = ping - baselinePing
 
                         when {
-                            // 1. ZON CEMAS (Ping > 300ms atau lonjakan mendadak > 180ms)
+                            // 1. ZON CEMAS
                             ping > 300 || bloatDelta > 180 -> {
                                 currentAdaptiveUploadMbps = 1.0
                                 currentAdaptiveDownloadMbps = 4.0
                                 uploadTokenBucket.adjustRate(currentAdaptiveUploadMbps)
                                 downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
                             }
-
-                            // 2. SESAK TINGGI (Lonjakan > 60ms dari paras lantai)
+                            // 2. SESAK TINGGI
                             bloatDelta > 60 -> {
                                 currentAdaptiveUploadMbps = (currentAdaptiveUploadMbps * 0.60).coerceAtLeast(1.2)
                                 currentAdaptiveDownloadMbps = (currentAdaptiveDownloadMbps * 0.70).coerceAtLeast(6.0)
                                 uploadTokenBucket.adjustRate(currentAdaptiveUploadMbps)
                                 downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
                             }
-
-                            // 3. MULA MERAYAP (Lonjakan > 20ms dari paras lantai)
+                            // 3. MULA MERAYAP
                             bloatDelta > 20 -> {
                                 currentAdaptiveUploadMbps = (currentAdaptiveUploadMbps * 0.85).coerceAtLeast(1.5)
                                 currentAdaptiveDownloadMbps = (currentAdaptiveDownloadMbps * 0.90).coerceAtLeast(10.0)
                                 uploadTokenBucket.adjustRate(currentAdaptiveUploadMbps)
                                 downloadTokenBucket.adjustRate(currentAdaptiveDownloadMbps)
                             }
-
-                            // 4. TALIAN TENANG & LAPANG (Rapat dengan lantai <= 10ms)
+                            // 4. TALIAN LAPANG & TENANG
                             bloatDelta <= 10 -> {
                                 currentAdaptiveUploadMbps = (currentAdaptiveUploadMbps + 0.4).coerceAtMost(30.0)
                                 currentAdaptiveDownloadMbps = (currentAdaptiveDownloadMbps + 1.2).coerceAtMost(40.0)
@@ -313,14 +381,14 @@ class FlowPacerService : VpnService() {
         )
         val deferreds = targets.map { (host, port) ->
             async {
-                probeSingleSocket(host, port, timeoutMs)
+                probePortLatency(host, port, timeoutMs)
             }
         }
         val results = deferreds.awaitAll().filter { it >= 0 }
         results.minOrNull() ?: -1L
     }
 
-    private fun probeSingleSocket(host: String, port: Int, timeoutMs: Int): Long {
+    private fun probePortLatency(host: String, port: Int, timeoutMs: Int): Long {
         val socket = Socket()
         return try {
             protect(socket)
@@ -345,6 +413,7 @@ class FlowPacerService : VpnService() {
             putExtra(EXTRA_DL_RATE_MBPS, dlMbps)
             putExtra(EXTRA_TX_BYTES, tx)
             putExtra(EXTRA_RX_BYTES, rx)
+            putExtra(EXTRA_ACTIVE_DNS, activeDnsDisplayName)
             setPackage(packageName)
         }
         sendBroadcast(intent)
@@ -359,6 +428,7 @@ class FlowPacerService : VpnService() {
 
         pingHistory.clear()
         baselinePing = 0L
+        activeDnsDisplayName = "--"
 
         try {
             proxyServer?.stop()
@@ -379,7 +449,6 @@ class FlowPacerService : VpnService() {
         createNotificationChannel()
         val notification = buildNotification()
 
-        // Selesaikan isu crash pada Android 10-13 (Hanya API 34+ menyokong FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
@@ -413,9 +482,11 @@ class FlowPacerService : VpnService() {
             else -> getString(R.string.notif_mode_auto)
         }
 
+        val dnsLabel = if (activeDnsDisplayName.isNotEmpty()) activeDnsDisplayName else "--"
+
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.notif_title_active))
-            .setContentText(getString(R.string.notif_desc_format, modeLabel))
+            .setContentText(getString(R.string.notif_desc_format, modeLabel, dnsLabel))
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
