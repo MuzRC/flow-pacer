@@ -185,12 +185,51 @@
                 app:singleSelection="true"
                 app:selectionRequired="true">
 
+                <!-- Pilihan Auto (Ping Terpantas) -->
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chipDnsAuto"
+                    style="@style/Widget.MaterialComponents.Chip.Choice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:checked="true"
+                    android:text="@string/dns_auto"
+                    android:textColor="#E2E8F0"
+                    app:chipBackgroundColor="#334155" />
+
+                <!-- Pilihan 3 DNS Sekuriti Baharu -->
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chipDnsCloudflareSec"
+                    style="@style/Widget.MaterialComponents.Chip.Choice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/dns_cloudflare_sec"
+                    android:textColor="#E2E8F0"
+                    app:chipBackgroundColor="#334155" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chipDnsQuad9"
+                    style="@style/Widget.MaterialComponents.Chip.Choice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/dns_quad9"
+                    android:textColor="#E2E8F0"
+                    app:chipBackgroundColor="#334155" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chipDnsOpenDns"
+                    style="@style/Widget.MaterialComponents.Chip.Choice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/dns_opendns"
+                    android:textColor="#E2E8F0"
+                    app:chipBackgroundColor="#334155" />
+
+                <!-- Pilihan Sedia Ada -->
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chipDnsCloudflare"
                     style="@style/Widget.MaterialComponents.Chip.Choice"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:checked="true"
                     android:text="@string/dns_cloudflare"
                     android:textColor="#E2E8F0"
                     app:chipBackgroundColor="#334155" />
@@ -251,6 +290,7 @@
                     android:layout_marginVertical="10dp"
                     android:background="#334155" />
 
+                <!-- Baris Kependaman Semasa -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -274,6 +314,32 @@
                         android:textStyle="bold" />
                 </LinearLayout>
 
+                <!-- Baris Baharu: Pelayan DNS Semasa -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/label_active_dns"
+                        android:textColor="#94A3B8"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/tvActiveDns"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/metric_dns_default"
+                        android:textColor="#38BDF8"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <!-- Siling Muat Naik -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
